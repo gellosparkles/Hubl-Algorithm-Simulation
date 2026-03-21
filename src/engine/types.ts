@@ -52,6 +52,7 @@ export interface SimConfig {
   minGroupSize: number;
   maxStopsPerRoute: number;
   timeBudgetMinutes: number;
+  maxWaitMinutes: number;
   useGoogleRouting: boolean;
   googleApiKey: string;
 }
