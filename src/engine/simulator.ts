@@ -258,7 +258,7 @@ export async function simulateStep(
   for (const bus of Object.values(s.buses)) {
     if (!bus.available || openStops.length === 0) continue;
 
-    const { route, etas, polylines } = await planRoute(bus, openStops, s.requests, config);
+    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config);
     if (route.length === 0) continue;
 
     bus.routeStartPosition = { ...bus.position };
@@ -266,25 +266,7 @@ export async function simulateStep(
     bus.route = route.map((st) => st.id);
     bus.routeEtas = etas;
     bus.routePolylines = polylines;
-
-    // Decode polylines for road-following interpolation
-    // For each leg, build a path: either from encoded polyline or synthetic L-shaped road path
-    const decoded: LatLng[][] = [];
-    for (let li = 0; li < route.length; li++) {
-      const enc = polylines[li];
-      if (enc && enc.length > 0) {
-        decoded.push(decodePolyline(enc));
-      } else {
-        // Generate synthetic L-shaped path to simulate road movement
-        const from = li === 0 ? bus.position : route[li - 1].position;
-        const to = route[li].position;
-        // Go east/west first, then north/south (simulating a road grid)
-        const midpoint: LatLng = { lat: from.lat, lng: to.lng };
-        decoded.push([from, midpoint, to]);
-      }
-    }
-    bus.decodedLegs = decoded;
-
+    bus.decodedLegs = decodedLegs;
     bus.busyUntil = s.time + etas[etas.length - 1] + 5;
 
     for (const st of route) {
