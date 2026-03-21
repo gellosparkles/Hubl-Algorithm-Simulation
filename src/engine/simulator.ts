@@ -144,8 +144,8 @@ export async function simulateStep(
         const frac = legDuration > 0 ? Math.min(1, Math.max(0, legElapsed / legDuration)) : 1;
 
         const from = legIdx === 0
-          ? bus.position
-          : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.position);
+          ? bus.routeStartPosition
+          : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.routeStartPosition);
 
         bus.position = {
           lat: from.lat + (targetStop.position.lat - from.lat) * frac,
