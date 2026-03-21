@@ -15,8 +15,10 @@ export interface Bus {
   route: number[]; // stop ids
   routeEtas: number[]; // cumulative ETA per stop (minutes)
   routePolylines: string[]; // encoded polylines per leg
+  decodedLegs: LatLng[][]; // decoded road points per leg
   onboard: number[]; // rider ids
   busyUntil: number; // sim minute when route completes
+  positionHistory: LatLng[]; // trail of past positions
 }
 
 export interface RiderRequest {

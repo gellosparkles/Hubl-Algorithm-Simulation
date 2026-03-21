@@ -55,22 +55,43 @@ export default function FallbackMap({ state }: Props) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
 
-    // ── Draw route paths (bus → chained stops) with distinct colors ──
     const busEntries = Object.values(state.buses);
+
+    // ── Draw position history trails ──
     busEntries.forEach((bus, idx) => {
-      if (bus.route.length === 0) return;
+      if (bus.positionHistory.length < 2) return;
+      const color = ROUTE_COLORS[idx % ROUTE_COLORS.length];
+
+      ctx.strokeStyle = color.replace(/[\d.]+\)$/, "0.3)");
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(toX(bus.positionHistory[0].lng), toY(bus.positionHistory[0].lat));
+      for (let i = 1; i < bus.positionHistory.length; i++) {
+        ctx.lineTo(toX(bus.positionHistory[i].lng), toY(bus.positionHistory[i].lat));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+
+    // ── Draw active route paths (decoded road legs) ──
+    busEntries.forEach((bus, idx) => {
+      if (bus.decodedLegs.length === 0) return;
       const color = ROUTE_COLORS[idx % ROUTE_COLORS.length];
 
       ctx.strokeStyle = color;
       ctx.lineWidth = 3;
       ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.moveTo(toX(bus.position.lng), toY(bus.position.lat));
-
-      for (const sid of bus.route) {
-        const stop = state.stops[sid];
-        if (stop) {
-          ctx.lineTo(toX(stop.position.lng), toY(stop.position.lat));
+      let started = false;
+      for (const leg of bus.decodedLegs) {
+        for (const pt of leg) {
+          if (!started) {
+            ctx.moveTo(toX(pt.lng), toY(pt.lat));
+            started = true;
+          } else {
+            ctx.lineTo(toX(pt.lng), toY(pt.lat));
+          }
         }
       }
       ctx.stroke();
@@ -82,13 +103,11 @@ export default function FallbackMap({ state }: Props) {
         const sx = toX(stop.position.lng);
         const sy = toY(stop.position.lat);
 
-        // small circle on route
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(sx, sy, 4, 0, Math.PI * 2);
         ctx.fill();
 
-        // sequence number
         ctx.fillStyle = "#fff";
         ctx.font = "bold 8px monospace";
         ctx.textAlign = "center";

@@ -48,11 +48,17 @@ export default function SimulationMap({ state, apiKey }: Props) {
   const busEntries = useMemo(() => Object.values(state.buses), [state.buses]);
   const stopEntries = useMemo(() => Object.values(state.stops), [state.stops]);
 
-  // build polylines from active bus routes
+  // build polylines from decoded legs or encoded polylines
   const routeLines = useMemo(() => {
     const lines: { path: google.maps.LatLngLiteral[]; busId: number }[] = [];
     for (const bus of busEntries) {
-      if (bus.routePolylines && bus.routePolylines.length > 0) {
+      if (bus.decodedLegs && bus.decodedLegs.length > 0) {
+        for (const leg of bus.decodedLegs) {
+          if (leg.length > 1) {
+            lines.push({ path: leg, busId: bus.id });
+          }
+        }
+      } else if (bus.routePolylines && bus.routePolylines.length > 0) {
         for (const enc of bus.routePolylines) {
           if (enc) {
             lines.push({ path: decodePolyline(enc), busId: bus.id });
@@ -61,6 +67,13 @@ export default function SimulationMap({ state, apiKey }: Props) {
       }
     }
     return lines;
+  }, [busEntries]);
+
+  // build trail lines from position history
+  const trailLines = useMemo(() => {
+    return busEntries
+      .filter((bus) => bus.positionHistory.length >= 2)
+      .map((bus) => ({ path: bus.positionHistory, busId: bus.id }));
   }, [busEntries]);
 
   if (!apiKey) {
@@ -129,7 +142,21 @@ export default function SimulationMap({ state, apiKey }: Props) {
         />
       ))}
 
-      {/* Route polylines */}
+      {/* Trail polylines (past path) */}
+      {trailLines.map((line, i) => (
+        <Polyline
+          key={`trail-${line.busId}-${i}`}
+          path={line.path}
+          options={{
+            strokeColor: "#888",
+            strokeWeight: 2,
+            strokeOpacity: 0.35,
+            icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.5, scale: 2 }, offset: "0", repeat: "10px" }],
+          }}
+        />
+      ))}
+
+      {/* Active route polylines */}
       {routeLines.map((line, i) => (
         <Polyline
           key={`poly-${line.busId}-${i}`}

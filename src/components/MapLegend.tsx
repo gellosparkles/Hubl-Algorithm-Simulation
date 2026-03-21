@@ -9,7 +9,8 @@ const items: LegendItem[] = [
   { color: "#2db87a", label: "Bus (en route)", shape: "circle" },
   { color: "#e6a817", label: "Stop (open / waiting)", shape: "triangle" },
   { color: "#4d9de0", label: "Stop (assigned)", shape: "triangle" },
-  { color: "rgba(45,184,122,0.7)", label: "Route path", shape: "line" },
+  { color: "rgba(45,184,122,0.7)", label: "Active route", shape: "line" },
+  { color: "rgba(136,136,136,0.5)", label: "Path taken (trail)", shape: "line" },
 ];
 
 function Shape({ item }: { item: LegendItem }) {

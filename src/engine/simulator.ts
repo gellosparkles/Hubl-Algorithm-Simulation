@@ -5,6 +5,7 @@
 
 import {
   Bus,
+  LatLng,
   RiderRequest,
   VirtualStop,
   SimConfig,
@@ -14,6 +15,52 @@ import {
 } from "./types";
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
+
+// decode Google encoded polyline into coordinate array
+function decodePolyline(encoded: string): LatLng[] {
+  const points: LatLng[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+// interpolate along a polyline path by fraction (0..1)
+function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
+  if (path.length === 0) return { lat: 0, lng: 0 };
+  if (path.length === 1 || fraction <= 0) return path[0];
+  if (fraction >= 1) return path[path.length - 1];
+
+  // compute cumulative distances
+  const dists: number[] = [0];
+  for (let i = 1; i < path.length; i++) {
+    const dlat = path[i].lat - path[i - 1].lat;
+    const dlng = path[i].lng - path[i - 1].lng;
+    dists.push(dists[i - 1] + Math.sqrt(dlat * dlat + dlng * dlng));
+  }
+  const totalDist = dists[dists.length - 1];
+  if (totalDist === 0) return path[0];
+
+  const targetDist = fraction * totalDist;
+  for (let i = 1; i < dists.length; i++) {
+    if (dists[i] >= targetDist) {
+      const segLen = dists[i] - dists[i - 1];
+      const segFrac = segLen > 0 ? (targetDist - dists[i - 1]) / segLen : 0;
+      return {
+        lat: path[i - 1].lat + (path[i].lat - path[i - 1].lat) * segFrac,
+        lng: path[i - 1].lng + (path[i].lng - path[i - 1].lng) * segFrac,
+      };
+    }
+  }
+  return path[path.length - 1];
+}
 
 function randomInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
@@ -73,8 +120,10 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
       route: [],
       routeEtas: [],
       routePolylines: [],
+      decodedLegs: [],
       onboard: [],
       busyUntil: 0,
+      positionHistory: [],
     };
   }
 
@@ -110,6 +159,7 @@ export async function simulateStep(
       if (lastStopId != null && s.stops[lastStopId]) {
         bus.position = { ...s.stops[lastStopId].position };
       }
+      bus.positionHistory.push({ ...bus.position });
       for (const rid of bus.onboard) {
         if (s.requests[rid]) s.requests[rid].status = "completed";
       }
@@ -118,12 +168,12 @@ export async function simulateStep(
       bus.route = [];
       bus.routeEtas = [];
       bus.routePolylines = [];
+      bus.decodedLegs = [];
     } else if (!bus.available && bus.route.length > 0) {
       // interpolate position along route based on elapsed time
       const routeStart = bus.busyUntil - (bus.routeEtas[bus.routeEtas.length - 1] || 0) - 5;
       const elapsed = s.time - routeStart;
 
-      // build waypoint list: [busStartPos, stop1, stop2, ...]
       // find which leg we're on
       let legIdx = 0;
       for (let i = 0; i < bus.routeEtas.length; i++) {
@@ -134,23 +184,34 @@ export async function simulateStep(
         legIdx = i;
       }
 
-      // lerp toward the current target stop
-      const targetStopId = bus.route[legIdx];
-      const targetStop = s.stops[targetStopId];
-      if (targetStop) {
-        const prevEta = legIdx > 0 ? bus.routeEtas[legIdx - 1] : 0;
-        const legDuration = bus.routeEtas[legIdx] - prevEta;
-        const legElapsed = elapsed - prevEta;
-        const frac = legDuration > 0 ? Math.min(1, Math.max(0, legElapsed / legDuration)) : 1;
+      const prevEta = legIdx > 0 ? bus.routeEtas[legIdx - 1] : 0;
+      const legDuration = bus.routeEtas[legIdx] - prevEta;
+      const legElapsed = elapsed - prevEta;
+      const frac = legDuration > 0 ? Math.min(1, Math.max(0, legElapsed / legDuration)) : 1;
 
-        const from = legIdx === 0
-          ? bus.routeStartPosition
-          : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.routeStartPosition);
+      // Use decoded polyline points if available for this leg
+      if (bus.decodedLegs[legIdx] && bus.decodedLegs[legIdx].length > 1) {
+        bus.position = interpolateAlongPath(bus.decodedLegs[legIdx], frac);
+      } else {
+        // fallback straight-line lerp
+        const targetStopId = bus.route[legIdx];
+        const targetStop = s.stops[targetStopId];
+        if (targetStop) {
+          const from = legIdx === 0
+            ? bus.routeStartPosition
+            : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.routeStartPosition);
+          bus.position = {
+            lat: from.lat + (targetStop.position.lat - from.lat) * frac,
+            lng: from.lng + (targetStop.position.lng - from.lng) * frac,
+          };
+        }
+      }
 
-        bus.position = {
-          lat: from.lat + (targetStop.position.lat - from.lat) * frac,
-          lng: from.lng + (targetStop.position.lng - from.lng) * frac,
-        };
+      // record trail
+      bus.positionHistory.push({ ...bus.position });
+      // cap history length to avoid memory bloat
+      if (bus.positionHistory.length > 200) {
+        bus.positionHistory = bus.positionHistory.slice(-200);
       }
     }
   }
@@ -205,6 +266,25 @@ export async function simulateStep(
     bus.route = route.map((st) => st.id);
     bus.routeEtas = etas;
     bus.routePolylines = polylines;
+
+    // Decode polylines for road-following interpolation
+    // For each leg, build a path: either from encoded polyline or synthetic L-shaped road path
+    const decoded: LatLng[][] = [];
+    for (let li = 0; li < route.length; li++) {
+      const enc = polylines[li];
+      if (enc && enc.length > 0) {
+        decoded.push(decodePolyline(enc));
+      } else {
+        // Generate synthetic L-shaped path to simulate road movement
+        const from = li === 0 ? bus.position : route[li - 1].position;
+        const to = route[li].position;
+        // Go east/west first, then north/south (simulating a road grid)
+        const midpoint: LatLng = { lat: from.lat, lng: to.lng };
+        decoded.push([from, midpoint, to]);
+      }
+    }
+    bus.decodedLegs = decoded;
+
     bus.busyUntil = s.time + etas[etas.length - 1] + 5;
 
     for (const st of route) {
