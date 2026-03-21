@@ -206,6 +206,19 @@ export default function SimulationControls({
               disabled={running}
             />
           </div>
+
+          <div className="space-y-1">
+            <div className="flex justify-between">
+              <Label className="text-xs text-sidebar-foreground/80">Max Wait Time (min)</Label>
+              <span className="text-xs font-mono text-sidebar-primary">{config.maxWaitMinutes}</span>
+            </div>
+            <Slider
+              min={3} max={30} step={1}
+              value={[config.maxWaitMinutes]}
+              onValueChange={([v]) => update({ maxWaitMinutes: v })}
+              disabled={running}
+            />
+          </div>
         </div>
       )}
     </div>

@@ -94,6 +94,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   minGroupSize: 2,
   maxStopsPerRoute: 5,
   timeBudgetMinutes: 25,
+  maxWaitMinutes: 10,
   useGoogleRouting: false,
   googleApiKey: "",
 };
