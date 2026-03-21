@@ -11,6 +11,9 @@ export default function Index() {
   const [config, setConfig] = useState<SimConfig>(DEFAULT_CONFIG);
   const [state, setState] = useState<SimState>(() => createInitialState(config));
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const busyRef = useRef(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const stop = useCallback(() => {
     if (intervalRef.current) {
@@ -25,17 +28,19 @@ export default function Index() {
     setState((s) => ({ ...s, running: true }));
 
     intervalRef.current = setInterval(async () => {
-      setState((prev) => {
-        if (prev.time >= config.simMinutes) {
-          stop();
-          return prev;
-        }
-        // fire async step, update when done
-        simulateStep(prev, config).then((next) => {
-          setState(next);
-        });
-        return prev;
-      });
+      if (busyRef.current) return; // skip if previous step still running
+      const prev = stateRef.current;
+      if (prev.time >= config.simMinutes) {
+        stop();
+        return;
+      }
+      busyRef.current = true;
+      try {
+        const next = await simulateStep(prev, config);
+        setState(next);
+      } finally {
+        busyRef.current = false;
+      }
     }, 400);
   }, [config, state.time, stop]);
 
