@@ -125,9 +125,9 @@ export default function FallbackMap({ state }: Props) {
       // triangle marker
       ctx.fillStyle = isOpen ? "#e6a817" : "#4d9de0";
       ctx.beginPath();
-      ctx.moveTo(x, y - 8);
-      ctx.lineTo(x - 5, y + 4);
-      ctx.lineTo(x + 5, y + 4);
+      ctx.moveTo(x, y - 5);
+      ctx.lineTo(x - 3, y + 3);
+      ctx.lineTo(x + 3, y + 3);
       ctx.closePath();
       ctx.fill();
       ctx.strokeStyle = "#fff";
