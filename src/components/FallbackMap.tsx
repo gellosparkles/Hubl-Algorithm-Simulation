@@ -55,6 +55,8 @@ export default function FallbackMap({ state }: Props) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
 
+    const busEntries = Object.values(state.buses);
+
     // ── Draw position history trails ──
     busEntries.forEach((bus, idx) => {
       if (bus.positionHistory.length < 2) return;
