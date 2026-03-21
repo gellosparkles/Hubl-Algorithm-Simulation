@@ -219,6 +219,19 @@ export default function SimulationControls({
               disabled={running}
             />
           </div>
+
+          <div className="space-y-1">
+            <div className="flex justify-between">
+              <Label className="text-xs text-sidebar-foreground/80">Avg Speed (km/h)</Label>
+              <span className="text-xs font-mono text-sidebar-primary">{config.busSpeed}</span>
+            </div>
+            <Slider
+              min={10} max={80} step={5}
+              value={[config.busSpeed]}
+              onValueChange={([v]) => update({ busSpeed: v })}
+              disabled={running}
+            />
+          </div>
         </div>
       )}
     </div>

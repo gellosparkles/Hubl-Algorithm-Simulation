@@ -115,7 +115,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
       position: pos,
       routeStartPosition: pos,
       capacity: config.busCapacity,
-      speed: 35,
+      speed: config.busSpeed,
       available: true,
       route: [],
       routeEtas: [],

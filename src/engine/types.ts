@@ -48,6 +48,7 @@ export interface SimConfig {
   avgRequestsPerMin: number;
   simMinutes: number;
   busCapacity: number;
+  busSpeed: number;
   maxWalkKm: number;
   minGroupSize: number;
   maxStopsPerRoute: number;
@@ -90,6 +91,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   avgRequestsPerMin: 6,
   simMinutes: 60,
   busCapacity: 12,
+  busSpeed: 35,
   maxWalkKm: 0.5,
   minGroupSize: 2,
   maxStopsPerRoute: 5,
