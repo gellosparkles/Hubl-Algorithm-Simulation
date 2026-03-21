@@ -5,6 +5,7 @@
 
 import {
   Bus,
+  LatLng,
   RiderRequest,
   VirtualStop,
   SimConfig,
@@ -12,6 +13,54 @@ import {
   SimMetrics,
   DEFAULT_CONFIG,
 } from "./types";
+import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
+import { planRoute } from "@/services/planner";
+
+// decode Google encoded polyline into coordinate array
+function decodePolyline(encoded: string): LatLng[] {
+  const points: LatLng[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+// interpolate along a polyline path by fraction (0..1)
+function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
+  if (path.length === 0) return { lat: 0, lng: 0 };
+  if (path.length === 1 || fraction <= 0) return path[0];
+  if (fraction >= 1) return path[path.length - 1];
+
+  // compute cumulative distances
+  const dists: number[] = [0];
+  for (let i = 1; i < path.length; i++) {
+    const dlat = path[i].lat - path[i - 1].lat;
+    const dlng = path[i].lng - path[i - 1].lng;
+    dists.push(dists[i - 1] + Math.sqrt(dlat * dlat + dlng * dlng));
+  }
+  const totalDist = dists[dists.length - 1];
+  if (totalDist === 0) return path[0];
+
+  const targetDist = fraction * totalDist;
+  for (let i = 1; i < dists.length; i++) {
+    if (dists[i] >= targetDist) {
+      const segLen = dists[i] - dists[i - 1];
+      const segFrac = segLen > 0 ? (targetDist - dists[i - 1]) / segLen : 0;
+      return {
+        lat: path[i - 1].lat + (path[i].lat - path[i - 1].lat) * segFrac,
+        lng: path[i - 1].lng + (path[i].lng - path[i - 1].lng) * segFrac,
+      };
+    }
+  }
+  return path[path.length - 1];
+}
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
 
