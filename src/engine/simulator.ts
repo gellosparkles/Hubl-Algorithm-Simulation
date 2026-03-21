@@ -61,8 +61,6 @@ function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
   }
   return path[path.length - 1];
 }
-import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
-import { planRoute } from "@/services/planner";
 
 function randomInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
