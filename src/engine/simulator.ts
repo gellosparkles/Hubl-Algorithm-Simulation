@@ -200,6 +200,7 @@ export async function simulateStep(
     const { route, etas, polylines } = await planRoute(bus, openStops, s.requests, config);
     if (route.length === 0) continue;
 
+    bus.routeStartPosition = { ...bus.position };
     bus.available = false;
     bus.route = route.map((st) => st.id);
     bus.routeEtas = etas;
