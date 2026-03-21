@@ -48,6 +48,7 @@ export interface SimConfig {
   avgRequestsPerMin: number;
   simMinutes: number;
   busCapacity: number;
+  busSpeed: number;
   maxWalkKm: number;
   minGroupSize: number;
   maxStopsPerRoute: number;
