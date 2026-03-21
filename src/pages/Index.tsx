@@ -5,6 +5,7 @@ import SimulationControls from "@/components/SimulationControls";
 import MetricsDashboard from "@/components/MetricsDashboard";
 import SimulationMap from "@/components/SimulationMap";
 import FallbackMap from "@/components/FallbackMap";
+import MapLegend from "@/components/MapLegend";
 
 export default function Index() {
   const [config, setConfig] = useState<SimConfig>(DEFAULT_CONFIG);
@@ -71,6 +72,7 @@ export default function Index() {
           ) : (
             <FallbackMap state={state} />
           )}
+          <MapLegend />
         </div>
 
         {/* Bottom metrics */}
