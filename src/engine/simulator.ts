@@ -251,6 +251,21 @@ export async function simulateStep(
     if (s.requests[rid]) Object.assign(s.requests[rid], updates);
   }
 
+  // 3b. Expire open stops that exceeded max wait time
+  for (const stop of Object.values(s.stops)) {
+    if (stop.status === "open" && (s.time - stop.createdAt) >= config.maxWaitMinutes) {
+      // mark riders back to pending (unassigned) so they can be re-clustered, then remove stop
+      for (const rid of stop.riderIds) {
+        if (s.requests[rid]) {
+          s.requests[rid].assignedStop = null;
+          s.requests[rid].status = "pending";
+        }
+      }
+      log.push(`t=${s.time}: stop ${stop.id} expired (waited ${config.maxWaitMinutes} min)`);
+      delete s.stops[stop.id];
+    }
+  }
+
   // 4. Assign routes to available buses
   let openStops = Object.values(s.stops).filter((st) => st.status === "open");
   openStops.sort((a, b) => a.createdAt - b.createdAt);
