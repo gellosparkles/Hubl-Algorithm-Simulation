@@ -72,6 +72,7 @@ export default function Index() {
           ) : (
             <FallbackMap state={state} />
           )}
+          <MapLegend />
         </div>
 
         {/* Bottom metrics */}
