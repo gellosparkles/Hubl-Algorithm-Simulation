@@ -1,0 +1,198 @@
+/**
+ * Simulation engine — advances time, generates riders, clusters stops,
+ * assigns bus routes, and tracks state.
+ */
+
+import {
+  Bus,
+  RiderRequest,
+  VirtualStop,
+  SimConfig,
+  SimState,
+  SimMetrics,
+  DEFAULT_CONFIG,
+} from "./types";
+import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
+import { planRoute } from "@/services/planner";
+
+function randomInRange(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+function poissonSample(lambda: number): number {
+  let L = Math.exp(-lambda);
+  let k = 0;
+  let p = 1;
+  do {
+    k++;
+    p *= Math.random();
+  } while (p > L);
+  return k - 1;
+}
+
+// ── LA neighborhoods for more realistic distribution ──
+const LA_HOTSPOTS = [
+  { lat: 34.0522, lng: -118.2437 }, // Downtown LA
+  { lat: 34.0195, lng: -118.4912 }, // Santa Monica
+  { lat: 34.0736, lng: -118.3911 }, // Hollywood
+  { lat: 34.0259, lng: -118.3965 }, // Beverly Hills
+  { lat: 33.9425, lng: -118.4081 }, // LAX area
+  { lat: 34.0633, lng: -118.3488 }, // Koreatown
+  { lat: 34.1478, lng: -118.1445 }, // Pasadena
+  { lat: 34.0195, lng: -118.2837 }, // USC area
+];
+
+function weightedRandomPoint(config: SimConfig): { lat: number; lng: number } {
+  // 60% chance near a hotspot, 40% uniform
+  if (Math.random() < 0.6) {
+    const hs = LA_HOTSPOTS[Math.floor(Math.random() * LA_HOTSPOTS.length)];
+    return {
+      lat: hs.lat + (Math.random() - 0.5) * 0.03,
+      lng: hs.lng + (Math.random() - 0.5) * 0.03,
+    };
+  }
+  return {
+    lat: randomInRange(config.bounds.latMin, config.bounds.latMax),
+    lng: randomInRange(config.bounds.lngMin, config.bounds.lngMax),
+  };
+}
+
+export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState {
+  resetStopCounter(1);
+
+  const buses: Record<number, Bus> = {};
+  for (let i = 1; i <= config.numBuses; i++) {
+    const pos = weightedRandomPoint(config);
+    buses[i] = {
+      id: i,
+      position: pos,
+      capacity: config.busCapacity,
+      speed: 25,
+      available: true,
+      route: [],
+      routeEtas: [],
+      routePolylines: [],
+      onboard: [],
+      busyUntil: 0,
+    };
+  }
+
+  return {
+    time: 0,
+    buses,
+    requests: {},
+    stops: {},
+    eventLog: [],
+    metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
+    running: false,
+  };
+}
+
+let nextReqId = 1;
+
+export function resetReqCounter() {
+  nextReqId = 1;
+}
+
+export async function simulateStep(
+  state: SimState,
+  config: SimConfig
+): Promise<SimState> {
+  const s = structuredClone(state) as SimState;
+  const log = s.eventLog;
+
+  // 1. Complete buses whose route time is up
+  for (const bus of Object.values(s.buses)) {
+    if (!bus.available && bus.busyUntil <= s.time) {
+      for (const rid of bus.onboard) {
+        if (s.requests[rid]) s.requests[rid].status = "completed";
+      }
+      bus.onboard = [];
+      bus.available = true;
+      bus.route = [];
+      bus.routeEtas = [];
+      bus.routePolylines = [];
+    }
+  }
+
+  // 2. Generate new rider requests
+  const n = poissonSample(config.avgRequestsPerMin);
+  for (let i = 0; i < n; i++) {
+    const origin = weightedRandomPoint(config);
+    const dest = weightedRandomPoint(config);
+    const r: RiderRequest = {
+      id: nextReqId++,
+      tRequest: s.time,
+      origin,
+      destination: dest,
+      assignedStop: null,
+      assignedBus: null,
+      status: "pending",
+      walkDistanceKm: null,
+      incentive: 0,
+    };
+    s.requests[r.id] = r;
+  }
+
+  // 3. Cluster pending riders into virtual stops
+  const { newStops, updatedRequests } = clusterRidersIntoStops(
+    s.requests,
+    s.time,
+    config.maxWalkKm,
+    config.minGroupSize
+  );
+  for (const stop of newStops) {
+    s.stops[stop.id] = stop;
+    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders`);
+  }
+  for (const [ridStr, updates] of Object.entries(updatedRequests)) {
+    const rid = Number(ridStr);
+    if (s.requests[rid]) Object.assign(s.requests[rid], updates);
+  }
+
+  // 4. Assign routes to available buses
+  let openStops = Object.values(s.stops).filter((st) => st.status === "open");
+  openStops.sort((a, b) => a.createdAt - b.createdAt);
+
+  for (const bus of Object.values(s.buses)) {
+    if (!bus.available || openStops.length === 0) continue;
+
+    const { route, etas, polylines } = await planRoute(bus, openStops, s.requests, config);
+    if (route.length === 0) continue;
+
+    bus.available = false;
+    bus.route = route.map((st) => st.id);
+    bus.routeEtas = etas;
+    bus.routePolylines = polylines;
+    bus.busyUntil = s.time + etas[etas.length - 1] + 5;
+
+    for (const st of route) {
+      s.stops[st.id].status = "assigned";
+      s.stops[st.id].assignedBus = bus.id;
+      for (const rid of st.riderIds) {
+        if (s.requests[rid] && s.requests[rid].status === "pending") {
+          s.requests[rid].status = "picked_up";
+          s.requests[rid].assignedBus = bus.id;
+          bus.onboard.push(rid);
+        }
+      }
+    }
+
+    log.push(`t=${s.time}: bus ${bus.id} assigned route [${bus.route.join(",")}]`);
+    openStops = openStops.filter((st) => st.status === "open");
+  }
+
+  // 5. Update metrics
+  const reqs = Object.values(s.requests);
+  s.metrics = {
+    busAssignments: log.filter((l) => l.includes("assigned route")).length,
+    completed: reqs.filter((r) => r.status === "completed").length,
+    pending: reqs.filter((r) => r.status === "pending").length,
+    pickedUp: reqs.filter((r) => r.status === "picked_up").length,
+    totalRequests: reqs.length,
+    totalStops: Object.keys(s.stops).length,
+  };
+
+  s.time += 1;
+  return s;
+}
