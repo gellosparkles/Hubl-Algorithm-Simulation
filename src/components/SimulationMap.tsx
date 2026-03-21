@@ -132,7 +132,7 @@ export default function SimulationMap({ state, apiKey }: Props) {
           position={stop.position}
           icon={{
             path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-            scale: 6,
+            scale: 4,
             fillColor: stop.status === "open" ? "#e6a817" : "#4d9de0",
             fillOpacity: 0.9,
             strokeColor: "#fff",
