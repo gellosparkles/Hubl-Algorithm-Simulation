@@ -142,7 +142,21 @@ export default function SimulationMap({ state, apiKey }: Props) {
         />
       ))}
 
-      {/* Route polylines */}
+      {/* Trail polylines (past path) */}
+      {trailLines.map((line, i) => (
+        <Polyline
+          key={`trail-${line.busId}-${i}`}
+          path={line.path}
+          options={{
+            strokeColor: "#888",
+            strokeWeight: 2,
+            strokeOpacity: 0.35,
+            icons: [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 0.5, scale: 2 }, offset: "0", repeat: "10px" }],
+          }}
+        />
+      ))}
+
+      {/* Active route polylines */}
       {routeLines.map((line, i) => (
         <Polyline
           key={`poly-${line.busId}-${i}`}
