@@ -66,6 +66,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     buses[i] = {
       id: i,
       position: pos,
+      routeStartPosition: pos,
       capacity: config.busCapacity,
       speed: 25,
       available: true,
