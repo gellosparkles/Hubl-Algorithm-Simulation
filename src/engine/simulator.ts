@@ -66,6 +66,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     buses[i] = {
       id: i,
       position: pos,
+      routeStartPosition: pos,
       capacity: config.busCapacity,
       speed: 25,
       available: true,
@@ -101,9 +102,14 @@ export async function simulateStep(
   const s = structuredClone(state) as SimState;
   const log = s.eventLog;
 
-  // 1. Complete buses whose route time is up
+  // 1. Advance bus positions along their routes & complete finished routes
   for (const bus of Object.values(s.buses)) {
     if (!bus.available && bus.busyUntil <= s.time) {
+      // route complete — snap to last stop position
+      const lastStopId = bus.route[bus.route.length - 1];
+      if (lastStopId != null && s.stops[lastStopId]) {
+        bus.position = { ...s.stops[lastStopId].position };
+      }
       for (const rid of bus.onboard) {
         if (s.requests[rid]) s.requests[rid].status = "completed";
       }
@@ -112,6 +118,40 @@ export async function simulateStep(
       bus.route = [];
       bus.routeEtas = [];
       bus.routePolylines = [];
+    } else if (!bus.available && bus.route.length > 0) {
+      // interpolate position along route based on elapsed time
+      const routeStart = bus.busyUntil - (bus.routeEtas[bus.routeEtas.length - 1] || 0) - 5;
+      const elapsed = s.time - routeStart;
+
+      // build waypoint list: [busStartPos, stop1, stop2, ...]
+      // find which leg we're on
+      let legIdx = 0;
+      for (let i = 0; i < bus.routeEtas.length; i++) {
+        if (elapsed < bus.routeEtas[i]) {
+          legIdx = i;
+          break;
+        }
+        legIdx = i;
+      }
+
+      // lerp toward the current target stop
+      const targetStopId = bus.route[legIdx];
+      const targetStop = s.stops[targetStopId];
+      if (targetStop) {
+        const prevEta = legIdx > 0 ? bus.routeEtas[legIdx - 1] : 0;
+        const legDuration = bus.routeEtas[legIdx] - prevEta;
+        const legElapsed = elapsed - prevEta;
+        const frac = legDuration > 0 ? Math.min(1, Math.max(0, legElapsed / legDuration)) : 1;
+
+        const from = legIdx === 0
+          ? bus.routeStartPosition
+          : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.routeStartPosition);
+
+        bus.position = {
+          lat: from.lat + (targetStop.position.lat - from.lat) * frac,
+          lng: from.lng + (targetStop.position.lng - from.lng) * frac,
+        };
+      }
     }
   }
 
@@ -160,6 +200,7 @@ export async function simulateStep(
     const { route, etas, polylines } = await planRoute(bus, openStops, s.requests, config);
     if (route.length === 0) continue;
 
+    bus.routeStartPosition = { ...bus.position };
     bus.available = false;
     bus.route = route.map((st) => st.id);
     bus.routeEtas = etas;

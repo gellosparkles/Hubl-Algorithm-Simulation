@@ -8,6 +8,7 @@ export interface LatLng {
 export interface Bus {
   id: number;
   position: LatLng;
+  routeStartPosition: LatLng; // position when route was assigned
   capacity: number;
   speed: number; // km/h
   available: boolean;
