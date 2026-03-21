@@ -120,8 +120,10 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
       route: [],
       routeEtas: [],
       routePolylines: [],
+      decodedLegs: [],
       onboard: [],
       busyUntil: 0,
+      positionHistory: [],
     };
   }
 
