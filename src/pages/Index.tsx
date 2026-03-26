@@ -50,6 +50,16 @@ export default function Index() {
     setState(createInitialState(config));
   }, [config, stop]);
 
+  const handleBusDrag = useCallback((busId: number, position: { lat: number; lng: number }) => {
+    setState((s) => ({
+      ...s,
+      buses: {
+        ...s.buses,
+        [busId]: { ...s.buses[busId], position, routeStartPosition: position, positionHistory: [] },
+      },
+    }));
+  }, []);
+
   // cleanup on unmount
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
@@ -73,7 +83,7 @@ export default function Index() {
         {/* Map */}
         <div className="flex-1 relative">
           {config.googleApiKey ? (
-            <SimulationMap state={state} apiKey={config.googleApiKey} />
+            <SimulationMap state={state} apiKey={config.googleApiKey} onBusDrag={handleBusDrag} />
           ) : (
             <FallbackMap state={state} />
           )}
