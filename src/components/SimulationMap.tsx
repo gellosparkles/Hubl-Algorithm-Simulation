@@ -29,9 +29,10 @@ function decodePolyline(encoded: string): google.maps.LatLngLiteral[] {
 interface Props {
   state: SimState;
   apiKey: string;
+  onBusDrag?: (busId: number, position: { lat: number; lng: number }) => void;
 }
 
-export default function SimulationMap({ state, apiKey }: Props) {
+export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: apiKey,
   });
@@ -112,6 +113,12 @@ export default function SimulationMap({ state, apiKey }: Props) {
         <Marker
           key={`bus-${bus.id}`}
           position={bus.position}
+          draggable={bus.available && !state.running && !!onBusDrag}
+          onDragEnd={(e) => {
+            if (e.latLng && onBusDrag) {
+              onBusDrag(bus.id, { lat: e.latLng.lat(), lng: e.latLng.lng() });
+            }
+          }}
           label={{ text: `B${bus.id}`, color: "#fff", fontSize: "10px", fontWeight: "bold" }}
           icon={{
             path: google.maps.SymbolPath.CIRCLE,
@@ -121,7 +128,7 @@ export default function SimulationMap({ state, apiKey }: Props) {
             strokeColor: "#fff",
             strokeWeight: 2,
           }}
-          title={`Bus ${bus.id} – ${bus.available ? "Available" : `${bus.onboard.length} onboard`}`}
+          title={`Bus ${bus.id} – ${bus.available ? "Available" : `${bus.onboard.length} onboard`}${bus.available && !state.running ? " (drag to reposition)" : ""}`}
         />
       ))}
 
