@@ -132,6 +132,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     buses,
     requests: {},
     stops: {},
+    dropOffHubs: [],
     eventLog: [],
     metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
     running: false,

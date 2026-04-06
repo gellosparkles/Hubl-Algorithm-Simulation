@@ -59,6 +59,7 @@ export function clusterRidersIntoStops(
       createdAt: currentTime,
       assignedBus: null,
       status: "open",
+      dropOffHubIndex: null,
     };
     newStops.push(stop);
 
