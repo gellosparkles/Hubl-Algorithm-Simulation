@@ -100,15 +100,27 @@ export default function SimulationControls({
             {placingDropOff ? "Stop Placing" : "Place Hubs"}
           </Button>
           {dropOffHubCount > 0 && (
-            <Button
-              onClick={onClearDropOffs}
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs"
-              disabled={running}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            <>
+              <Button
+                onClick={onToggleLockHubs}
+                variant={hubsLocked ? "default" : "outline"}
+                size="sm"
+                className="gap-1 text-xs"
+                disabled={running}
+                title={hubsLocked ? "Unlock hubs (will be cleared on refresh)" : "Lock hubs (saved across refresh)"}
+              >
+                {hubsLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+              </Button>
+              <Button
+                onClick={onClearDropOffs}
+                variant="outline"
+                size="sm"
+                className="gap-1 text-xs"
+                disabled={running || hubsLocked}
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </>
           )}
         </div>
       </div>

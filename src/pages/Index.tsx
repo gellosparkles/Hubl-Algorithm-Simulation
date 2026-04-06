@@ -7,9 +7,25 @@ import SimulationMap from "@/components/SimulationMap";
 import FallbackMap from "@/components/FallbackMap";
 import MapLegend from "@/components/MapLegend";
 
+const HUBS_STORAGE_KEY = "sim-dropoff-hubs";
+
+function loadLockedHubs(): LatLng[] | null {
+  try {
+    const raw = localStorage.getItem(HUBS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as LatLng[];
+  } catch { /* ignore */ }
+  return null;
+}
+
 export default function Index() {
   const [config, setConfig] = useState<SimConfig>(DEFAULT_CONFIG);
-  const [state, setState] = useState<SimState>(() => createInitialState(config));
+  const [state, setState] = useState<SimState>(() => {
+    const initial = createInitialState(config);
+    const saved = loadLockedHubs();
+    if (saved) initial.dropOffHubs = saved;
+    return initial;
+  });
+  const [hubsLocked, setHubsLocked] = useState(() => !!loadLockedHubs());
   const [placingDropOff, setPlacingDropOff] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const busyRef = useRef(false);
