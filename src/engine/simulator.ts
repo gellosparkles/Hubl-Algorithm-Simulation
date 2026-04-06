@@ -279,7 +279,7 @@ export async function simulateStep(
   for (const bus of Object.values(s.buses)) {
     if (!bus.available || openStops.length === 0) continue;
 
-    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config);
+    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config, s.dropOffHubs);
     if (route.length === 0) continue;
 
     bus.routeStartPosition = { ...bus.position };
@@ -291,13 +291,18 @@ export async function simulateStep(
     bus.busyUntil = s.time + etas[etas.length - 1] + 5;
 
     for (const st of route) {
-      s.stops[st.id].status = "assigned";
-      s.stops[st.id].assignedBus = bus.id;
-      for (const rid of st.riderIds) {
-        if (s.requests[rid] && s.requests[rid].status === "pending") {
-          s.requests[rid].status = "picked_up";
-          s.requests[rid].assignedBus = bus.id;
-          bus.onboard.push(rid);
+      if (st.isDropOff) {
+        // Register drop-off stop in state
+        s.stops[st.id] = st;
+      } else {
+        s.stops[st.id].status = "assigned";
+        s.stops[st.id].assignedBus = bus.id;
+        for (const rid of st.riderIds) {
+          if (s.requests[rid] && s.requests[rid].status === "pending") {
+            s.requests[rid].status = "picked_up";
+            s.requests[rid].assignedBus = bus.id;
+            bus.onboard.push(rid);
+          }
         }
       }
     }
