@@ -89,19 +89,53 @@ const LA_HOTSPOTS = [
   { lat: 34.0195, lng: -118.2837 }, // USC area
 ];
 
-function weightedRandomPoint(config: SimConfig): { lat: number; lng: number } {
-  // 60% chance near a hotspot, 40% uniform
-  if (Math.random() < 0.6) {
-    const hs = LA_HOTSPOTS[Math.floor(Math.random() * LA_HOTSPOTS.length)];
-    return {
-      lat: hs.lat + (Math.random() - 0.5) * 0.03,
-      lng: hs.lng + (Math.random() - 0.5) * 0.03,
-    };
+// Approximate LA coastline polygon — points west/south of this line are ocean
+const LA_COASTLINE: LatLng[] = [
+  { lat: 34.15, lng: -118.53 },  // north of Malibu (top-left)
+  { lat: 34.04, lng: -118.52 },  // Santa Monica Mountains coast
+  { lat: 34.01, lng: -118.51 },  // Santa Monica pier
+  { lat: 33.96, lng: -118.47 },  // Playa del Rey
+  { lat: 33.93, lng: -118.44 },  // El Segundo / LAX coast
+  { lat: 33.90, lng: -118.41 },  // Manhattan Beach
+  { lat: 33.86, lng: -118.39 },  // Redondo Beach (south edge)
+  { lat: 33.86, lng: -118.15 },  // far SE corner (inland)
+  { lat: 34.15, lng: -118.15 },  // far NE corner (inland)
+];
+
+/** Ray-casting point-in-polygon test */
+function isOnLand(pt: LatLng): boolean {
+  let inside = false;
+  const poly = LA_COASTLINE;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i].lat, xi = poly[i].lng;
+    const yj = poly[j].lat, xj = poly[j].lng;
+    if ((yi > pt.lat) !== (yj > pt.lat) &&
+        pt.lng < ((xj - xi) * (pt.lat - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
   }
-  return {
-    lat: randomInRange(config.bounds.latMin, config.bounds.latMax),
-    lng: randomInRange(config.bounds.lngMin, config.bounds.lngMax),
-  };
+  return inside;
+}
+
+function weightedRandomPoint(config: SimConfig): { lat: number; lng: number } {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let pt: LatLng;
+    if (Math.random() < 0.6) {
+      const hs = LA_HOTSPOTS[Math.floor(Math.random() * LA_HOTSPOTS.length)];
+      pt = {
+        lat: hs.lat + (Math.random() - 0.5) * 0.03,
+        lng: hs.lng + (Math.random() - 0.5) * 0.03,
+      };
+    } else {
+      pt = {
+        lat: randomInRange(config.bounds.latMin, config.bounds.latMax),
+        lng: randomInRange(config.bounds.lngMin, config.bounds.lngMax),
+      };
+    }
+    if (isOnLand(pt)) return pt;
+  }
+  // fallback to a known land point
+  return { ...LA_HOTSPOTS[0] };
 }
 
 export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState {
