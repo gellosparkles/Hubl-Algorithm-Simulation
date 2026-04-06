@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Play, Pause, RotateCcw, Settings, MapPin, Trash2 } from "lucide-react";
+import { Play, Pause, RotateCcw, Settings, MapPin, Trash2, Lock, Unlock } from "lucide-react";
 
 interface Props {
   config: SimConfig;
@@ -19,6 +19,8 @@ interface Props {
   placingDropOff: boolean;
   onTogglePlaceDropOff: () => void;
   onClearDropOffs: () => void;
+  hubsLocked: boolean;
+  onToggleLockHubs: () => void;
 }
 
 export default function SimulationControls({
@@ -33,6 +35,8 @@ export default function SimulationControls({
   placingDropOff,
   onTogglePlaceDropOff,
   onClearDropOffs,
+  hubsLocked,
+  onToggleLockHubs,
 }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -96,15 +100,27 @@ export default function SimulationControls({
             {placingDropOff ? "Stop Placing" : "Place Hubs"}
           </Button>
           {dropOffHubCount > 0 && (
-            <Button
-              onClick={onClearDropOffs}
-              variant="outline"
-              size="sm"
-              className="gap-1 text-xs"
-              disabled={running}
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            <>
+              <Button
+                onClick={onToggleLockHubs}
+                variant={hubsLocked ? "default" : "outline"}
+                size="sm"
+                className="gap-1 text-xs"
+                disabled={running}
+                title={hubsLocked ? "Unlock hubs (will be cleared on refresh)" : "Lock hubs (saved across refresh)"}
+              >
+                {hubsLocked ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+              </Button>
+              <Button
+                onClick={onClearDropOffs}
+                variant="outline"
+                size="sm"
+                className="gap-1 text-xs"
+                disabled={running || hubsLocked}
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </>
           )}
         </div>
       </div>
