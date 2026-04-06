@@ -132,6 +132,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     buses,
     requests: {},
     stops: {},
+    dropOffHubs: [],
     eventLog: [],
     metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
     running: false,
@@ -160,6 +161,7 @@ export async function simulateStep(
         bus.position = { ...s.stops[lastStopId].position };
       }
       bus.positionHistory.push({ ...bus.position });
+      // Mark riders whose drop-off stop was reached as completed
       for (const rid of bus.onboard) {
         if (s.requests[rid]) s.requests[rid].status = "completed";
       }
@@ -243,8 +245,12 @@ export async function simulateStep(
     config.minGroupSize
   );
   for (const stop of newStops) {
+    // Randomly assign a drop-off hub if hubs exist
+    if (s.dropOffHubs.length > 0) {
+      stop.dropOffHubIndex = Math.floor(Math.random() * s.dropOffHubs.length);
+    }
     s.stops[stop.id] = stop;
-    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders`);
+    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders${stop.dropOffHubIndex != null ? ` → hub ${stop.dropOffHubIndex + 1}` : ""}`);
   }
   for (const [ridStr, updates] of Object.entries(updatedRequests)) {
     const rid = Number(ridStr);
@@ -273,7 +279,7 @@ export async function simulateStep(
   for (const bus of Object.values(s.buses)) {
     if (!bus.available || openStops.length === 0) continue;
 
-    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config);
+    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config, s.dropOffHubs);
     if (route.length === 0) continue;
 
     bus.routeStartPosition = { ...bus.position };
@@ -285,13 +291,18 @@ export async function simulateStep(
     bus.busyUntil = s.time + etas[etas.length - 1] + 5;
 
     for (const st of route) {
-      s.stops[st.id].status = "assigned";
-      s.stops[st.id].assignedBus = bus.id;
-      for (const rid of st.riderIds) {
-        if (s.requests[rid] && s.requests[rid].status === "pending") {
-          s.requests[rid].status = "picked_up";
-          s.requests[rid].assignedBus = bus.id;
-          bus.onboard.push(rid);
+      if (st.isDropOff) {
+        // Register drop-off stop in state
+        s.stops[st.id] = st;
+      } else {
+        s.stops[st.id].status = "assigned";
+        s.stops[st.id].assignedBus = bus.id;
+        for (const rid of st.riderIds) {
+          if (s.requests[rid] && s.requests[rid].status === "pending") {
+            s.requests[rid].status = "picked_up";
+            s.requests[rid].assignedBus = bus.id;
+            bus.onboard.push(rid);
+          }
         }
       }
     }

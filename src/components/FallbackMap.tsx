@@ -1,13 +1,16 @@
 /**
  * Canvas-based fallback map when no Google API key is provided.
- * Renders buses, stops, route paths, and pickup-point labels.
+ * Renders buses, stops, route paths, drop-off hubs, and pickup-point labels.
  */
 
-import { useRef, useEffect } from "react";
-import { SimState, LA_BOUNDS } from "@/engine/types";
+import { useRef, useEffect, useCallback } from "react";
+import { SimState, LA_BOUNDS, LatLng } from "@/engine/types";
 
 interface Props {
   state: SimState;
+  onMapClick?: (pos: LatLng) => void;
+  placingDropOff?: boolean;
+  onRemoveDropOff?: (index: number) => void;
 }
 
 const ROUTE_COLORS = [
@@ -21,8 +24,23 @@ const ROUTE_COLORS = [
   "rgba(120,200,80,0.6)",
 ];
 
-export default function FallbackMap({ state }: Props) {
+export default function FallbackMap({ state, onMapClick, placingDropOff, onRemoveDropOff }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!placingDropOff || !onMapClick) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const { latMin, latMax, lngMin, lngMax } = LA_BOUNDS;
+    const lng = lngMin + (x / w) * (lngMax - lngMin);
+    const lat = latMax - (y / h) * (latMax - latMin);
+    onMapClick({ lat, lng });
+  }, [placingDropOff, onMapClick]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -116,8 +134,9 @@ export default function FallbackMap({ state }: Props) {
       });
     });
 
-    // ── Draw stops ──
+    // ── Draw stops (pickup only) ──
     for (const stop of Object.values(state.stops)) {
+      if (stop.isDropOff) continue;
       const x = toX(stop.position.lng);
       const y = toY(stop.position.lat);
       const isOpen = stop.status === "open";
@@ -147,6 +166,28 @@ export default function FallbackMap({ state }: Props) {
         ctx.fillText(badge, x, y + 6);
       }
     }
+
+    // ── Draw drop-off hubs ──
+    state.dropOffHubs.forEach((hub, i) => {
+      const x = toX(hub.lng);
+      const y = toY(hub.lat);
+
+      // Red circle
+      ctx.fillStyle = "#e63946";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Label
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 8px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`D${i + 1}`, x, y);
+    });
 
     // ── Draw buses ──
     for (const bus of busEntries) {
@@ -191,7 +232,8 @@ export default function FallbackMap({ state }: Props) {
     <canvas
       ref={canvasRef}
       className="w-full h-full rounded-lg"
-      style={{ display: "block" }}
+      style={{ display: "block", cursor: placingDropOff ? "crosshair" : "default" }}
+      onClick={handleCanvasClick}
     />
   );
 }

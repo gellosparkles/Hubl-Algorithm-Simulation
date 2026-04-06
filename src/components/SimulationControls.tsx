@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Play, Pause, RotateCcw, Settings } from "lucide-react";
+import { Play, Pause, RotateCcw, Settings, MapPin, Trash2 } from "lucide-react";
 
 interface Props {
   config: SimConfig;
@@ -15,6 +15,10 @@ interface Props {
   onPause: () => void;
   onReset: () => void;
   currentTime: number;
+  dropOffHubCount: number;
+  placingDropOff: boolean;
+  onTogglePlaceDropOff: () => void;
+  onClearDropOffs: () => void;
 }
 
 export default function SimulationControls({
@@ -25,6 +29,10 @@ export default function SimulationControls({
   onPause,
   onReset,
   currentTime,
+  dropOffHubCount,
+  placingDropOff,
+  onTogglePlaceDropOff,
+  onClearDropOffs,
 }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -65,6 +73,40 @@ export default function SimulationControls({
         <Button onClick={onReset} variant="outline" size="sm">
           <RotateCcw className="h-4 w-4" />
         </Button>
+      </div>
+
+      {/* Drop-off hub controls */}
+      <div className="space-y-2 border border-sidebar-border rounded-lg p-3">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-sidebar-foreground/80 font-semibold">Drop-off Hubs</Label>
+          <span className="text-xs font-mono text-sidebar-primary">{dropOffHubCount}/10</span>
+        </div>
+        <p className="text-[10px] text-sidebar-foreground/50">
+          Place drop-off locations on the map. Riders are routed to these after pickup.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            onClick={onTogglePlaceDropOff}
+            variant={placingDropOff ? "destructive" : "outline"}
+            size="sm"
+            className="flex-1 gap-1 text-xs"
+            disabled={running || (!placingDropOff && dropOffHubCount >= 10)}
+          >
+            <MapPin className="h-3 w-3" />
+            {placingDropOff ? "Stop Placing" : "Place Hubs"}
+          </Button>
+          {dropOffHubCount > 0 && (
+            <Button
+              onClick={onClearDropOffs}
+              variant="outline"
+              size="sm"
+              className="gap-1 text-xs"
+              disabled={running}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* API Key */}

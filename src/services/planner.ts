@@ -3,6 +3,7 @@
  *
  * Uses greedy nearest-neighbor: picks the closest unvisited open stop
  * that fits within capacity and time budget, repeating until done.
+ * After pickups, appends drop-off legs to assigned drop-off hubs.
  *
  * When Google routing is available, travel times and road paths come from
  * the Maps JS API DirectionsService; otherwise haversine + constant speed.
@@ -22,7 +23,8 @@ export async function planRoute(
   bus: Bus,
   openStops: VirtualStop[],
   requests: Record<number, RiderRequest>,
-  config: SimConfig
+  config: SimConfig,
+  dropOffHubs: LatLng[] = []
 ): Promise<PlanResult> {
   const route: VirtualStop[] = [];
   const etas: number[] = [];
@@ -34,6 +36,7 @@ export async function planRoute(
   let t = 0;
   const candidates = [...openStops];
 
+  // ── Phase 1: Pickup stops (greedy nearest-neighbor) ──
   while (candidates.length > 0 && cap > 0 && route.length < config.maxStopsPerRoute) {
     let bestIdx = -1;
     let bestDist = Infinity;
@@ -91,6 +94,77 @@ export async function planRoute(
     cap -= best.riderIds.filter((rid) => requests[rid]?.status === "pending").length;
     cur = { ...best.position };
     candidates.splice(bestIdx, 1);
+  }
+
+  // ── Phase 2: Drop-off legs ──
+  // Collect unique drop-off hub indices from the picked-up stops
+  if (dropOffHubs.length > 0 && route.length > 0) {
+    const hubIndicesUsed = new Set<number>();
+    for (const stop of route) {
+      if (stop.dropOffHubIndex != null) {
+        hubIndicesUsed.add(stop.dropOffHubIndex);
+      }
+    }
+
+    // Sort hubs by distance from current position (greedy)
+    const hubList = Array.from(hubIndicesUsed).sort((a, b) => {
+      return haversine(cur, dropOffHubs[a]) - haversine(cur, dropOffHubs[b]);
+    });
+
+    let dropOffStopIdBase = -1000; // negative IDs for drop-off "stops"
+    for (const hubIdx of hubList) {
+      const hubPos = dropOffHubs[hubIdx];
+      const dist = haversine(cur, hubPos);
+      let travelMin = travelTimeMinutes(dist, bus.speed);
+      const unloadMin = 1;
+
+      let polyline = "";
+      let legPath: LatLng[] = [];
+      if (config.useGoogleRouting && config.googleApiKey) {
+        try {
+          const dir = await getDirections(cur, hubPos, config.googleApiKey, true);
+          polyline = dir.polyline;
+          legPath = dir.decodedPath;
+          if (dir.durationMinutes > 0) travelMin = dir.durationMinutes;
+        } catch { /* fallback */ }
+      }
+
+      if (legPath.length < 2) {
+        const midpoint: LatLng = { lat: cur.lat, lng: hubPos.lng };
+        legPath = [{ ...cur }, midpoint, { ...hubPos }];
+      }
+
+      t += travelMin + unloadMin;
+
+      // Collect rider IDs being dropped off at this hub
+      const dropRiderIds: number[] = [];
+      for (const stop of route) {
+        if (stop.dropOffHubIndex === hubIdx) {
+          for (const rid of stop.riderIds) {
+            if (requests[rid]?.status === "pending") {
+              dropRiderIds.push(rid);
+            }
+          }
+        }
+      }
+
+      const dropOffStop: VirtualStop = {
+        id: dropOffStopIdBase--,
+        position: hubPos,
+        riderIds: dropRiderIds,
+        createdAt: 0,
+        assignedBus: bus.id,
+        status: "dropoff",
+        dropOffHubIndex: hubIdx,
+        isDropOff: true,
+      };
+
+      route.push(dropOffStop);
+      etas.push(Math.ceil(t));
+      polylines.push(polyline);
+      decodedLegs.push(legPath);
+      cur = { ...hubPos };
+    }
   }
 
   return { route, etas, polylines, decodedLegs };

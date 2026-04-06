@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { SimConfig, SimState, DEFAULT_CONFIG } from "@/engine/types";
+import { SimConfig, SimState, DEFAULT_CONFIG, LatLng } from "@/engine/types";
 import { createInitialState, simulateStep, resetReqCounter } from "@/engine/simulator";
 import SimulationControls from "@/components/SimulationControls";
 import MetricsDashboard from "@/components/MetricsDashboard";
@@ -10,6 +10,7 @@ import MapLegend from "@/components/MapLegend";
 export default function Index() {
   const [config, setConfig] = useState<SimConfig>(DEFAULT_CONFIG);
   const [state, setState] = useState<SimState>(() => createInitialState(config));
+  const [placingDropOff, setPlacingDropOff] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const busyRef = useRef(false);
   const stateRef = useRef(state);
@@ -25,10 +26,11 @@ export default function Index() {
 
   const start = useCallback(() => {
     if (state.time >= config.simMinutes) return;
+    setPlacingDropOff(false);
     setState((s) => ({ ...s, running: true }));
 
     intervalRef.current = setInterval(async () => {
-      if (busyRef.current) return; // skip if previous step still running
+      if (busyRef.current) return;
       const prev = stateRef.current;
       if (prev.time >= config.simMinutes) {
         stop();
@@ -60,6 +62,21 @@ export default function Index() {
     }));
   }, []);
 
+  const handleMapClick = useCallback((pos: LatLng) => {
+    if (!placingDropOff) return;
+    setState((s) => {
+      if (s.dropOffHubs.length >= 10) return s;
+      return { ...s, dropOffHubs: [...s.dropOffHubs, pos] };
+    });
+  }, [placingDropOff]);
+
+  const handleRemoveDropOff = useCallback((index: number) => {
+    setState((s) => ({
+      ...s,
+      dropOffHubs: s.dropOffHubs.filter((_, i) => i !== index),
+    }));
+  }, []);
+
   // cleanup on unmount
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
@@ -75,6 +92,10 @@ export default function Index() {
           onPause={stop}
           onReset={reset}
           currentTime={state.time}
+          dropOffHubCount={state.dropOffHubs.length}
+          placingDropOff={placingDropOff}
+          onTogglePlaceDropOff={() => setPlacingDropOff((v) => !v)}
+          onClearDropOffs={() => setState((s) => ({ ...s, dropOffHubs: [] }))}
         />
       </aside>
 
@@ -83,11 +104,27 @@ export default function Index() {
         {/* Map */}
         <div className="flex-1 relative">
           {config.googleApiKey ? (
-            <SimulationMap state={state} apiKey={config.googleApiKey} onBusDrag={handleBusDrag} />
+            <SimulationMap
+              state={state}
+              apiKey={config.googleApiKey}
+              onBusDrag={handleBusDrag}
+              onMapClick={handleMapClick}
+              placingDropOff={placingDropOff}
+            />
           ) : (
-            <FallbackMap state={state} />
+            <FallbackMap
+              state={state}
+              onMapClick={handleMapClick}
+              placingDropOff={placingDropOff}
+              onRemoveDropOff={handleRemoveDropOff}
+            />
           )}
           <MapLegend />
+          {placingDropOff && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse z-50">
+              Click on the map to place drop-off locations ({state.dropOffHubs.length}/10)
+            </div>
+          )}
         </div>
 
         {/* Bottom metrics */}

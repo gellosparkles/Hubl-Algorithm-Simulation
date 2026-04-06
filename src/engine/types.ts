@@ -39,7 +39,9 @@ export interface VirtualStop {
   riderIds: number[];
   createdAt: number;
   assignedBus: number | null;
-  status: "open" | "assigned";
+  status: "open" | "assigned" | "dropoff";
+  dropOffHubIndex: number | null; // which drop-off hub riders go to
+  isDropOff?: boolean; // true if this "stop" is actually a drop-off destination
 }
 
 export interface SimConfig {
@@ -72,6 +74,7 @@ export interface SimState {
   buses: Record<number, Bus>;
   requests: Record<number, RiderRequest>;
   stops: Record<number, VirtualStop>;
+  dropOffHubs: LatLng[]; // user-placed drop-off locations (up to 10)
   eventLog: string[];
   metrics: SimMetrics;
   running: boolean;
