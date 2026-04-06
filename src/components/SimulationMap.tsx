@@ -5,7 +5,7 @@ import {
   Marker,
   Polyline,
 } from "@react-google-maps/api";
-import { SimState } from "@/engine/types";
+import { SimState, LatLng } from "@/engine/types";
 
 const MAP_CENTER = { lat: 34.05, lng: -118.35 };
 const MAP_STYLES = { width: "100%", height: "100%" };
@@ -30,9 +30,11 @@ interface Props {
   state: SimState;
   apiKey: string;
   onBusDrag?: (busId: number, position: { lat: number; lng: number }) => void;
+  onMapClick?: (pos: LatLng) => void;
+  placingDropOff?: boolean;
 }
 
-export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
+export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, placingDropOff }: Props) {
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: apiKey,
   });
@@ -46,8 +48,14 @@ export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
     });
   }, []);
 
+  const handleMapClick = useCallback((e: google.maps.MapMouseEvent) => {
+    if (placingDropOff && e.latLng && onMapClick) {
+      onMapClick({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+    }
+  }, [placingDropOff, onMapClick]);
+
   const busEntries = useMemo(() => Object.values(state.buses), [state.buses]);
-  const stopEntries = useMemo(() => Object.values(state.stops), [state.stops]);
+  const stopEntries = useMemo(() => Object.values(state.stops).filter(s => !s.isDropOff), [state.stops]);
 
   // build polylines from decoded legs or encoded polylines
   const routeLines = useMemo(() => {
@@ -106,7 +114,13 @@ export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
       center={MAP_CENTER}
       zoom={11}
       onLoad={onLoad}
-      options={{ disableDefaultUI: false, zoomControl: true, mapTypeControl: false }}
+      onClick={handleMapClick}
+      options={{
+        disableDefaultUI: false,
+        zoomControl: true,
+        mapTypeControl: false,
+        draggableCursor: placingDropOff ? "crosshair" : undefined,
+      }}
     >
       {/* Buses */}
       {busEntries.map((bus) => (
@@ -132,7 +146,7 @@ export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
         />
       ))}
 
-      {/* Virtual stops */}
+      {/* Virtual stops (pickup only) */}
       {stopEntries.map((stop) => (
         <Marker
           key={`stop-${stop.id}`}
@@ -146,6 +160,24 @@ export default function SimulationMap({ state, apiKey, onBusDrag }: Props) {
             strokeWeight: 1,
           }}
           title={`Stop ${stop.id} – ${stop.riderIds.length} riders – ${stop.status}`}
+        />
+      ))}
+
+      {/* Drop-off hub markers */}
+      {state.dropOffHubs.map((hub, i) => (
+        <Marker
+          key={`dropoff-hub-${i}`}
+          position={hub}
+          label={{ text: `D${i + 1}`, color: "#fff", fontSize: "9px", fontWeight: "bold" }}
+          icon={{
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 9,
+            fillColor: "#e63946",
+            fillOpacity: 0.9,
+            strokeColor: "#fff",
+            strokeWeight: 2,
+          }}
+          title={`Drop-off Hub ${i + 1}`}
         />
       ))}
 
