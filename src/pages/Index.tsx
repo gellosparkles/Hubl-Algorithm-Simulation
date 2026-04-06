@@ -65,8 +65,24 @@ export default function Index() {
   const reset = useCallback(() => {
     stop();
     resetReqCounter();
-    setState(createInitialState(config));
-  }, [config, stop]);
+    const initial = createInitialState(config);
+    if (hubsLocked) {
+      const saved = loadLockedHubs();
+      if (saved) initial.dropOffHubs = saved;
+    }
+    setState(initial);
+  }, [config, stop, hubsLocked]);
+
+  const handleToggleLockHubs = useCallback(() => {
+    setHubsLocked((prev) => {
+      if (!prev) {
+        localStorage.setItem(HUBS_STORAGE_KEY, JSON.stringify(stateRef.current.dropOffHubs));
+      } else {
+        localStorage.removeItem(HUBS_STORAGE_KEY);
+      }
+      return !prev;
+    });
+  }, []);
 
   const handleBusDrag = useCallback((busId: number, position: { lat: number; lng: number }) => {
     setState((s) => ({
