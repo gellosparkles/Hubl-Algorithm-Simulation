@@ -35,6 +35,8 @@ export default function SimulationControls({
   placingDropOff,
   onTogglePlaceDropOff,
   onClearDropOffs,
+  hubsLocked,
+  onToggleLockHubs,
 }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
