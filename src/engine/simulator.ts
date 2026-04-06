@@ -161,6 +161,7 @@ export async function simulateStep(
         bus.position = { ...s.stops[lastStopId].position };
       }
       bus.positionHistory.push({ ...bus.position });
+      // Mark riders whose drop-off stop was reached as completed
       for (const rid of bus.onboard) {
         if (s.requests[rid]) s.requests[rid].status = "completed";
       }
@@ -244,8 +245,12 @@ export async function simulateStep(
     config.minGroupSize
   );
   for (const stop of newStops) {
+    // Randomly assign a drop-off hub if hubs exist
+    if (s.dropOffHubs.length > 0) {
+      stop.dropOffHubIndex = Math.floor(Math.random() * s.dropOffHubs.length);
+    }
     s.stops[stop.id] = stop;
-    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders`);
+    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders${stop.dropOffHubIndex != null ? ` → hub ${stop.dropOffHubIndex + 1}` : ""}`);
   }
   for (const [ridStr, updates] of Object.entries(updatedRequests)) {
     const rid = Number(ridStr);
