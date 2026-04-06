@@ -19,6 +19,8 @@ interface Props {
   placingDropOff: boolean;
   onTogglePlaceDropOff: () => void;
   onClearDropOffs: () => void;
+  hubsLocked: boolean;
+  onToggleLockHubs: () => void;
 }
 
 export default function SimulationControls({
