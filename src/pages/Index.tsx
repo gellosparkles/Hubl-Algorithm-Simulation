@@ -128,6 +128,8 @@ export default function Index() {
           placingDropOff={placingDropOff}
           onTogglePlaceDropOff={() => setPlacingDropOff((v) => !v)}
           onClearDropOffs={() => setState((s) => ({ ...s, dropOffHubs: [] }))}
+          hubsLocked={hubsLocked}
+          onToggleLockHubs={handleToggleLockHubs}
         />
       </aside>
 
