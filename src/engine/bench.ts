@@ -19,7 +19,8 @@
 
 import { createInitialState, simulateStep } from "./simulator";
 import { DEFAULT_CONFIG, LatLng, SimConfig, SimState } from "./types";
-import { haversine, travelTimeMinutes } from "@/services/routing";
+import { haversine } from "@/services/routing";
+import { createTravelTimeProvider } from "@/services/travelTime";
 
 /** Default drop-off hubs for a bench run that doesn't supply its own. Mirrors simulator.test.ts. */
 export const DEFAULT_BENCH_HUBS: LatLng[] = [
@@ -87,6 +88,7 @@ export async function runBenchSeed(
   hubs: LatLng[] = DEFAULT_BENCH_HUBS
 ): Promise<BenchKpis> {
   const config: SimConfig = { ...DEFAULT_CONFIG, ...overrides, seed, simMinutes: minutes };
+  const travelTime = createTravelTimeProvider(config);
 
   let s: SimState = createInitialState(config);
   s.dropOffHubs = hubs;
@@ -124,7 +126,7 @@ export async function runBenchSeed(
 
     const tc = tCompleted[r.id];
     if (tc == null) continue;
-    const directMin = travelTimeMinutes(haversine(r.origin, r.destination), config.busSpeed);
+    const directMin = travelTime.time(r.origin, r.destination, r.tRequest);
     if (directMin > 0.01) detours.push((tc - ta) / directMin);
   }
 
@@ -152,7 +154,9 @@ export async function runBenchSeed(
     meanOccupancy: mean(occupancySamples),
     totalStops: s.metrics.totalStops,
     busAssignments: s.metrics.busAssignments,
-    travelTimeProvider: config.useGoogleRouting && config.googleApiKey ? "google" : "haversine",
+    // Every travel-time estimate above came from `travelTime`, regardless of
+    // config.useGoogleRouting — no GoogleMatrixProvider exists yet (plan.md Phase 1 follow-up).
+    travelTimeProvider: travelTime.name,
   };
 }
 

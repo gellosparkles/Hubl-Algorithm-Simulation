@@ -5,12 +5,15 @@
  * that fits within capacity and time budget, repeating until done.
  * After pickups, appends drop-off legs to assigned drop-off hubs.
  *
- * When Google routing is available, travel times and road paths come from
- * the Maps JS API DirectionsService; otherwise haversine + constant speed.
+ * Travel time (the number the dispatcher trusts for budgets and ETAs) always
+ * comes from a TravelTimeProvider. When Google routing is available, its
+ * DirectionsService additionally supplies road-snapped polylines for display,
+ * but never overrides the provider's duration — see plan.md Phase 1.
  */
 
 import { Bus, LatLng, RiderRequest, VirtualStop, SimConfig } from "@/engine/types";
-import { haversine, travelTimeMinutes, getDirections } from "@/services/routing";
+import { haversine, getDirections } from "@/services/routing";
+import { TravelTimeProvider } from "@/services/travelTime";
 
 interface PlanResult {
   route: VirtualStop[];
@@ -24,7 +27,9 @@ export async function planRoute(
   openStops: VirtualStop[],
   requests: Record<number, RiderRequest>,
   config: SimConfig,
-  dropOffHubs: LatLng[] = []
+  travelTime: TravelTimeProvider,
+  dropOffHubs: LatLng[] = [],
+  now = 0
 ): Promise<PlanResult> {
   const route: VirtualStop[] = [];
   const etas: number[] = [];
@@ -58,12 +63,12 @@ export async function planRoute(
     if (bestIdx === -1) break;
 
     const best = candidates[bestIdx];
-    let travelMin = travelTimeMinutes(bestDist, bus.speed);
+    const travelMin = travelTime.time(cur, best.position, now + t);
     const pickupMin = 1 + 0.2 * best.riderIds.length;
 
     if (route.length > 0 && t + travelMin + pickupMin > config.timeBudgetMinutes) break;
 
-    // Get road-snapped path if Google routing enabled
+    // Get road-snapped path if Google routing enabled — geometry only, never timing.
     let polyline = "";
     let legPath: LatLng[] = [];
     if (config.useGoogleRouting && config.googleApiKey) {
@@ -71,9 +76,6 @@ export async function planRoute(
         const dir = await getDirections(cur, best.position, config.googleApiKey, true);
         polyline = dir.polyline;
         legPath = dir.decodedPath;
-        if (dir.durationMinutes > 0) {
-          travelMin = dir.durationMinutes;
-        }
       } catch {
         // fallback: no polyline
       }
@@ -114,8 +116,7 @@ export async function planRoute(
     let dropOffStopIdBase = -1000; // negative IDs for drop-off "stops"
     for (const hubIdx of hubList) {
       const hubPos = dropOffHubs[hubIdx];
-      const dist = haversine(cur, hubPos);
-      let travelMin = travelTimeMinutes(dist, bus.speed);
+      const travelMin = travelTime.time(cur, hubPos, now + t);
       const unloadMin = 1;
 
       let polyline = "";
@@ -125,7 +126,6 @@ export async function planRoute(
           const dir = await getDirections(cur, hubPos, config.googleApiKey, true);
           polyline = dir.polyline;
           legPath = dir.decodedPath;
-          if (dir.durationMinutes > 0) travelMin = dir.durationMinutes;
         } catch { /* fallback */ }
       }
 

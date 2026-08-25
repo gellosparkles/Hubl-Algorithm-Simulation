@@ -15,6 +15,7 @@ import {
 } from "./types";
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
+import { createTravelTimeProvider } from "@/services/travelTime";
 import { Rng, createRng, randomSeed } from "./rng";
 
 // decode Google encoded polyline into coordinate array
@@ -319,10 +320,12 @@ export async function simulateStep(
   let openStops = Object.values(s.stops).filter((st) => st.status === "open");
   openStops.sort((a, b) => a.createdAt - b.createdAt);
 
+  const travelTime = createTravelTimeProvider(config);
+
   for (const bus of Object.values(s.buses)) {
     if (!bus.available || openStops.length === 0) continue;
 
-    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config, s.dropOffHubs);
+    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config, travelTime, s.dropOffHubs, s.time);
     if (route.length === 0) continue;
 
     bus.routeStartPosition = { ...bus.position };

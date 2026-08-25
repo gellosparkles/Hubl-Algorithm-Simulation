@@ -25,7 +25,13 @@ function deg2rad(d: number) {
   return (d * Math.PI) / 180;
 }
 
-export function travelTimeMinutes(distKm: number, speedKmh = 25): number {
+// Geometry-only fallback speed for getDirections() below when Google is
+// unavailable — display purposes only. The dispatcher's travel-time
+// estimates come from TravelTimeProvider (src/services/travelTime.ts), never
+// from this default.
+const DISPLAY_FALLBACK_SPEED_KMH = 32;
+
+export function travelTimeMinutes(distKm: number, speedKmh: number = DISPLAY_FALLBACK_SPEED_KMH): number {
   return (distKm / speedKmh) * 60;
 }
 
@@ -110,44 +116,3 @@ export async function getDirections(
   }
 }
 
-interface DistanceResult {
-  distanceKm: number;
-  durationMinutes: number;
-}
-
-/**
- * Get distance & duration. Uses DirectionsService for accuracy when available.
- */
-export async function getDistance(
-  origin: LatLng,
-  dest: LatLng,
-  apiKey: string,
-  useGoogle: boolean
-): Promise<DistanceResult> {
-  if (!useGoogle || !apiKey) {
-    const d = haversine(origin, dest);
-    return { distanceKm: d, durationMinutes: travelTimeMinutes(d) };
-  }
-
-  const dir = await getDirections(origin, dest, apiKey, true);
-  if (dir.distanceKm > 0) {
-    return { distanceKm: dir.distanceKm, durationMinutes: dir.durationMinutes };
-  }
-
-  const d = haversine(origin, dest);
-  return { distanceKm: d, durationMinutes: travelTimeMinutes(d) };
-}
-
-/**
- * Batch distance matrix using haversine (JS API DistanceMatrixService could be added later).
- */
-export async function getDistanceMatrix(
-  origins: LatLng[],
-  destinations: LatLng[],
-  _apiKey: string,
-  _useGoogle: boolean
-): Promise<number[][]> {
-  return origins.map((o) =>
-    destinations.map((d) => travelTimeMinutes(haversine(o, d)))
-  );
-}

@@ -44,12 +44,24 @@ export interface VirtualStop {
   isDropOff?: boolean; // true if this "stop" is actually a drop-off destination
 }
 
+/**
+ * A single daily peak window, in minutes-since-midnight (wrapped mod 1440),
+ * during which travel is slower. See TravelTimeProvider in services/travelTime.ts.
+ */
+export interface SpeedProfile {
+  offPeakKmh: number;
+  peakKmh: number;
+  peakStartMin: number;
+  peakEndMin: number;
+}
+
 export interface SimConfig {
   bounds: { latMin: number; latMax: number; lngMin: number; lngMax: number };
   numBuses: number;
   avgRequestsPerMin: number;
   simMinutes: number;
   busCapacity: number;
+  /** @deprecated no longer used for travel-time estimates — see SpeedProfile / TravelTimeProvider. Still seeds Bus.speed. */
   busSpeed: number;
   maxWalkKm: number;
   minGroupSize: number;
@@ -58,6 +70,10 @@ export interface SimConfig {
   maxWaitMinutes: number;
   useGoogleRouting: boolean;
   googleApiKey: string;
+  /** Street-network circuity factor applied to haversine distance (LA grid ≈ 1.35). */
+  detourFactor: number;
+  /** Time-of-day speed profile used by the default TravelTimeProvider. */
+  speedProfile: SpeedProfile;
   /** Fixed RNG seed for reproducible runs; null draws a fresh seed each reset. */
   seed: number | null;
 }
@@ -105,5 +121,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   maxWaitMinutes: 10,
   useGoogleRouting: false,
   googleApiKey: "",
+  detourFactor: 1.35,
+  speedProfile: { offPeakKmh: 32, peakKmh: 18, peakStartMin: 420, peakEndMin: 600 },
   seed: null,
 };
