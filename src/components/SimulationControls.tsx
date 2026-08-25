@@ -314,13 +314,13 @@ export default function SimulationControls({
 
           <div className="space-y-1">
             <div className="flex justify-between">
-              <Label className="text-xs text-sidebar-foreground/80">Avg Speed (km/h)</Label>
-              <span className="text-xs font-mono text-sidebar-primary">{config.busSpeed}</span>
+              <Label className="text-xs text-sidebar-foreground/80">Off-Peak Speed (km/h)</Label>
+              <span className="text-xs font-mono text-sidebar-primary">{config.speedProfile.offPeakKmh}</span>
             </div>
             <Slider
               min={10} max={80} step={5}
-              value={[config.busSpeed]}
-              onValueChange={([v]) => update({ busSpeed: v })}
+              value={[config.speedProfile.offPeakKmh]}
+              onValueChange={([v]) => update({ speedProfile: { ...config.speedProfile, offPeakKmh: v } })}
               disabled={running}
             />
           </div>

@@ -61,7 +61,7 @@ export interface SimConfig {
   avgRequestsPerMin: number;
   simMinutes: number;
   busCapacity: number;
-  /** @deprecated no longer used for travel-time estimates — see SpeedProfile / TravelTimeProvider. Still seeds Bus.speed. */
+  /** @deprecated unused — travel time comes from SpeedProfile / TravelTimeProvider. Bus.speed still reads this but nothing reads Bus.speed. */
   busSpeed: number;
   maxWalkKm: number;
   minGroupSize: number;

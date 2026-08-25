@@ -97,10 +97,15 @@ module-global RNG would not allow. `src/engine/simulator.test.ts` asserts all of
 When comparing algorithm variants, hold the seed fixed and change one parameter. Sweep several
 seeds before believing a result — one seed is an anecdote.
 
-**Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes: ~372 requests,
-**~297 still pending, ~14 completed**, ~85 stops, ~15 bus assignments. Throughput is the obvious
-optimization target — most riders never get served. Record metrics before and after any
-planner/clustering change rather than judging by watching the map.
+**Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
+with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~352 requests, **~314 still
+pending, ~5 completed**, ~79 stops, ~10 bus assignments. These ETAs are honest (detour factor +
+time-of-day speed profile) rather than the old optimistic straight-line estimate, so throughput
+looks worse than earlier baselines despite no planner/clustering change — that's expected, not a
+regression. Throughput is the obvious optimization target — most riders never get served. Record
+metrics before and after any planner/clustering change rather than judging by watching the map,
+and note which `TravelTimeProvider` a benchmark used since haversine and Google runs aren't
+comparable.
 
 ### Test layout
 
