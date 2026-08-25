@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Play, Pause, RotateCcw, Settings, MapPin, Trash2, Lock, Unlock } from "lucide-react";
+import { Play, Pause, RotateCcw, Settings, MapPin, Trash2, Lock, Unlock, Dices } from "lucide-react";
 
 interface Props {
   config: SimConfig;
@@ -200,6 +200,40 @@ export default function SimulationControls({
 
       {showAdvanced && (
         <div className="space-y-3 border-t border-sidebar-border pt-3">
+          {/* Random seed — pin it to replay an identical run */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs text-sidebar-foreground/80">Random Seed</Label>
+              <span className="text-[10px] font-mono text-sidebar-foreground/50">
+                {config.seed === null ? "random" : "fixed"}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                type="number"
+                placeholder="random each reset"
+                value={config.seed ?? ""}
+                onChange={(e) =>
+                  update({ seed: e.target.value === "" ? null : Number(e.target.value) })
+                }
+                disabled={running}
+                className="h-8 text-xs bg-sidebar-accent border-sidebar-border text-sidebar-foreground"
+              />
+              <Button
+                onClick={() => update({ seed: Math.floor(Math.random() * 1e9) })}
+                variant="outline"
+                size="sm"
+                disabled={running}
+                title="Generate a new seed"
+              >
+                <Dices className="h-3 w-3" />
+              </Button>
+            </div>
+            <p className="text-[10px] text-sidebar-foreground/50">
+              Pin a seed, then Reset to replay the exact same run.
+            </p>
+          </div>
+
           <div className="space-y-1">
             <div className="flex justify-between">
               <Label className="text-xs text-sidebar-foreground/80">Bus Capacity</Label>

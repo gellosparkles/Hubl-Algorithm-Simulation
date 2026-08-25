@@ -58,6 +58,8 @@ export interface SimConfig {
   maxWaitMinutes: number;
   useGoogleRouting: boolean;
   googleApiKey: string;
+  /** Fixed RNG seed for reproducible runs; null draws a fresh seed each reset. */
+  seed: number | null;
 }
 
 export interface SimMetrics {
@@ -78,6 +80,7 @@ export interface SimState {
   eventLog: string[];
   metrics: SimMetrics;
   running: boolean;
+  rngState: number; // mulberry32 state — advances every step, clones cleanly
 }
 
 // LA metro bounding box
@@ -102,4 +105,5 @@ export const DEFAULT_CONFIG: SimConfig = {
   maxWaitMinutes: 10,
   useGoogleRouting: false,
   googleApiKey: "",
+  seed: null,
 };

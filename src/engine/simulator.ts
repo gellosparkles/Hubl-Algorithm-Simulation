@@ -15,6 +15,7 @@ import {
 } from "./types";
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
+import { Rng, createRng, randomSeed } from "./rng";
 
 // decode Google encoded polyline into coordinate array
 function decodePolyline(encoded: string): LatLng[] {
@@ -62,17 +63,17 @@ function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
   return path[path.length - 1];
 }
 
-function randomInRange(min: number, max: number): number {
-  return min + Math.random() * (max - min);
+function randomInRange(min: number, max: number, rng: Rng): number {
+  return min + rng.next() * (max - min);
 }
 
-function poissonSample(lambda: number): number {
-  let L = Math.exp(-lambda);
+function poissonSample(lambda: number, rng: Rng): number {
+  const L = Math.exp(-lambda);
   let k = 0;
   let p = 1;
   do {
     k++;
-    p *= Math.random();
+    p *= rng.next();
   } while (p > L);
   return k - 1;
 }
@@ -117,19 +118,19 @@ function isOnLand(pt: LatLng): boolean {
   return inside;
 }
 
-function weightedRandomPoint(config: SimConfig): { lat: number; lng: number } {
+function weightedRandomPoint(config: SimConfig, rng: Rng): { lat: number; lng: number } {
   for (let attempt = 0; attempt < 20; attempt++) {
     let pt: LatLng;
-    if (Math.random() < 0.6) {
-      const hs = LA_HOTSPOTS[Math.floor(Math.random() * LA_HOTSPOTS.length)];
+    if (rng.next() < 0.6) {
+      const hs = LA_HOTSPOTS[Math.floor(rng.next() * LA_HOTSPOTS.length)];
       pt = {
-        lat: hs.lat + (Math.random() - 0.5) * 0.03,
-        lng: hs.lng + (Math.random() - 0.5) * 0.03,
+        lat: hs.lat + (rng.next() - 0.5) * 0.03,
+        lng: hs.lng + (rng.next() - 0.5) * 0.03,
       };
     } else {
       pt = {
-        lat: randomInRange(config.bounds.latMin, config.bounds.latMax),
-        lng: randomInRange(config.bounds.lngMin, config.bounds.lngMax),
+        lat: randomInRange(config.bounds.latMin, config.bounds.latMax, rng),
+        lng: randomInRange(config.bounds.lngMin, config.bounds.lngMax, rng),
       };
     }
     if (isOnLand(pt)) return pt;
@@ -140,10 +141,13 @@ function weightedRandomPoint(config: SimConfig): { lat: number; lng: number } {
 
 export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState {
   resetStopCounter(1);
+  resetReqCounter();
+
+  const rng = createRng(config.seed ?? randomSeed());
 
   const buses: Record<number, Bus> = {};
   for (let i = 1; i <= config.numBuses; i++) {
-    const pos = weightedRandomPoint(config);
+    const pos = weightedRandomPoint(config, rng);
     buses[i] = {
       id: i,
       position: pos,
@@ -170,6 +174,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     eventLog: [],
     metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
     running: false,
+    rngState: rng.state,
   };
 }
 
@@ -185,6 +190,10 @@ export async function simulateStep(
 ): Promise<SimState> {
   const s = structuredClone(state) as SimState;
   const log = s.eventLog;
+
+  // Resume the seeded sequence where the previous step left off. Written back
+  // to s.rngState at the end so the next step continues deterministically.
+  const rng = createRng(s.rngState);
 
   // 1. Advance bus positions along their routes & complete finished routes
   for (const bus of Object.values(s.buses)) {
@@ -253,10 +262,10 @@ export async function simulateStep(
   }
 
   // 2. Generate new rider requests
-  const n = poissonSample(config.avgRequestsPerMin);
+  const n = poissonSample(config.avgRequestsPerMin, rng);
   for (let i = 0; i < n; i++) {
-    const origin = weightedRandomPoint(config);
-    const dest = weightedRandomPoint(config);
+    const origin = weightedRandomPoint(config, rng);
+    const dest = weightedRandomPoint(config, rng);
     const r: RiderRequest = {
       id: nextReqId++,
       tRequest: s.time,
@@ -281,7 +290,7 @@ export async function simulateStep(
   for (const stop of newStops) {
     // Randomly assign a drop-off hub if hubs exist
     if (s.dropOffHubs.length > 0) {
-      stop.dropOffHubIndex = Math.floor(Math.random() * s.dropOffHubs.length);
+      stop.dropOffHubIndex = Math.floor(rng.next() * s.dropOffHubs.length);
     }
     s.stops[stop.id] = stop;
     log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders${stop.dropOffHubIndex != null ? ` → hub ${stop.dropOffHubIndex + 1}` : ""}`);
@@ -356,6 +365,7 @@ export async function simulateStep(
     totalStops: Object.keys(s.stops).length,
   };
 
+  s.rngState = rng.state;
   s.time += 1;
   return s;
 }
