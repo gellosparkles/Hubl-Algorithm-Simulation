@@ -10,7 +10,12 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:engine": "vitest run --project engine",
+    "test:ui": "vitest run --project ui",
+    "bench": "vite-node src/engine/bench.cli.ts",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
