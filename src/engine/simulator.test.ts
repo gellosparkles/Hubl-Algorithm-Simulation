@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createInitialState, simulateStep } from "./simulator";
 import { DEFAULT_CONFIG, SimConfig, SimState } from "./types";
 import { createRng } from "./rng";
@@ -92,6 +92,47 @@ describe("simulation determinism", () => {
     }
     expect(b.rngState).toBe(a.rngState);
     expect(b.metrics).toEqual(a.metrics);
+  });
+});
+
+describe("TravelTimeProvider wiring", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("pre-warms one batched matrix call per tick instead of calling per leg, and records a run-wide fallback honestly", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("no network in tests");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const config: SimConfig = {
+      ...DEFAULT_CONFIG,
+      seed: 9,
+      simMinutes: 3,
+      useGoogleRouting: true,
+      googleApiKey: "test-key",
+    };
+    let s = createInitialState(config);
+    s.dropOffHubs = HUBS;
+    for (let i = 0; i < config.simMinutes; i++) s = await simulateStep(s, config);
+
+    // One matrix() attempt per tick that had points to warm, never one per leg.
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(config.simMinutes);
+    // The client always failed, so every tick's dispatch fell back — and that
+    // must survive in final state even though the provider itself is
+    // recreated (and discarded) fresh every tick.
+    expect(s.travelTimeProviderDegraded).toBe(true);
+  });
+
+  it("never touches fetch when useGoogleRouting is off, at any point in a run", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const s = await run({ seed: 9, useGoogleRouting: false }, 5);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(s.travelTimeProviderDegraded).toBe(false);
   });
 });
 

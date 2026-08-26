@@ -20,7 +20,7 @@
 import { createInitialState, simulateStep } from "./simulator";
 import { DEFAULT_CONFIG, LatLng, SimConfig, SimState } from "./types";
 import { haversine } from "@/services/routing";
-import { createTravelTimeProvider } from "@/services/travelTime";
+import { createTravelTimeProvider, TravelTimeProvider } from "@/services/travelTime";
 
 /** Default drop-off hubs for a bench run that doesn't supply its own. Mirrors simulator.test.ts. */
 export const DEFAULT_BENCH_HUBS: LatLng[] = [
@@ -43,7 +43,7 @@ export interface BenchKpis {
   meanOccupancy: number; // mean onboard riders per bus, averaged over ticks
   totalStops: number;
   busAssignments: number;
-  travelTimeProvider: "haversine" | "google";
+  travelTimeProvider: TravelTimeProvider["name"] | "google-fallback";
 }
 
 export type BenchSummary = Omit<BenchKpis, "seed" | "travelTimeProvider">;
@@ -52,7 +52,7 @@ export interface BenchAggregate {
   overrides: Partial<SimConfig>;
   seeds: number[];
   minutes: number;
-  travelTimeProvider: "haversine" | "google";
+  travelTimeProvider: TravelTimeProvider["name"] | "google-fallback";
   perSeed: BenchKpis[];
   mean: BenchSummary;
 }
@@ -78,6 +78,18 @@ export function median(xs: number[]): number {
 
 function mean(xs: number[]): number {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+}
+
+/**
+ * A provider's `name` is fixed at construction and would keep reporting
+ * "google" even if every lookup that tick silently fell back to haversine —
+ * which would make a benchmark comparison a lie. `simulateStep` builds a
+ * fresh provider every tick (see simulator.ts), so no single provider
+ * instance ever sees the whole run; `SimState.travelTimeProviderDegraded`
+ * is the sticky, run-wide signal of whether *any* tick's dispatch fell back.
+ */
+function providerLabel(name: TravelTimeProvider["name"], degraded: boolean): BenchKpis["travelTimeProvider"] {
+  return name === "google" && degraded ? "google-fallback" : name;
 }
 
 /** Run one seeded simulation to completion and compute its KPIs. */
@@ -154,9 +166,7 @@ export async function runBenchSeed(
     meanOccupancy: mean(occupancySamples),
     totalStops: s.metrics.totalStops,
     busAssignments: s.metrics.busAssignments,
-    // Every travel-time estimate above came from `travelTime`, regardless of
-    // config.useGoogleRouting — no GoogleMatrixProvider exists yet (plan.md Phase 1 follow-up).
-    travelTimeProvider: travelTime.name,
+    travelTimeProvider: providerLabel(travelTime.name, s.travelTimeProviderDegraded),
   };
 }
 
@@ -191,11 +201,19 @@ export async function runBenchSweep(
     busAssignments: mean(pick((k) => k.busAssignments)),
   };
 
+  // A sweep-wide label must not hide a seed that degraded: report
+  // "google-fallback" if *any* seed did, not just the first one.
+  const sweepProvider: BenchAggregate["travelTimeProvider"] = perSeed.some(
+    (k) => k.travelTimeProvider === "google-fallback"
+  )
+    ? "google-fallback"
+    : (perSeed[0]?.travelTimeProvider ?? "haversine");
+
   return {
     overrides,
     seeds,
     minutes,
-    travelTimeProvider: perSeed[0]?.travelTimeProvider ?? "haversine",
+    travelTimeProvider: sweepProvider,
     perSeed,
     mean: meanSummary,
   };

@@ -176,6 +176,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
     running: false,
     rngState: rng.state,
+    travelTimeProviderDegraded: false,
   };
 }
 
@@ -322,6 +323,25 @@ export async function simulateStep(
 
   const travelTime = createTravelTimeProvider(config);
 
+  // planRoute below calls travelTime.time() synchronously, per leg, as its
+  // greedy search discovers each next stop — that can never itself be the
+  // batched call a network-backed provider needs (see TravelTimeProvider's
+  // interface docstring). So warm the batch cache once per tick, up front,
+  // over every point this tick's planning might touch: bus positions, open
+  // stops, and drop-off hubs. Skipped for the haversine provider, which has
+  // no network round-trip to batch and would just pay an O(n^2) cost here
+  // for nothing.
+  if (config.useGoogleRouting && config.googleApiKey) {
+    const points = [
+      ...Object.values(s.buses).filter((b) => b.available).map((b) => b.position),
+      ...openStops.map((st) => st.position),
+      ...s.dropOffHubs,
+    ];
+    if (points.length > 0) {
+      await travelTime.matrix(points, points, s.time);
+    }
+  }
+
   for (const bus of Object.values(s.buses)) {
     if (!bus.available || openStops.length === 0) continue;
 
@@ -356,6 +376,8 @@ export async function simulateStep(
     log.push(`t=${s.time}: bus ${bus.id} assigned route [${bus.route.join(",")}]`);
     openStops = openStops.filter((st) => st.status === "open");
   }
+
+  if (travelTime.degraded) s.travelTimeProviderDegraded = true;
 
   // 5. Update metrics
   const reqs = Object.values(s.requests);

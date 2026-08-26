@@ -97,6 +97,14 @@ export interface SimState {
   metrics: SimMetrics;
   running: boolean;
   rngState: number; // mulberry32 state — advances every step, clones cleanly
+  /**
+   * Sticky across the run: true once any tick's TravelTimeProvider fell back
+   * (e.g. Google → haversine). A fresh provider is created every tick (see
+   * simulator.ts), so this is the only place a caller can learn whether the
+   * *actual dispatch* ever degraded — a per-tick provider's own `degraded`
+   * flag doesn't survive past that tick.
+   */
+  travelTimeProviderDegraded: boolean;
 }
 
 // LA metro bounding box
