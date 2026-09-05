@@ -1,5 +1,5 @@
 import { SimMetrics } from "@/engine/types";
-import { Bus, Users, MapPin, CheckCircle, Clock, Route } from "lucide-react";
+import { Bus, Users, MapPin, CheckCircle, Clock, Route, Ban } from "lucide-react";
 
 interface Props {
   metrics: SimMetrics;
@@ -11,6 +11,7 @@ export default function MetricsDashboard({ metrics, eventLog }: Props) {
     { label: "Total Riders", value: metrics.totalRequests, icon: Users, color: "text-primary" },
     { label: "Completed", value: metrics.completed, icon: CheckCircle, color: "text-accent" },
     { label: "Pending", value: metrics.pending, icon: Clock, color: "text-destructive" },
+    { label: "Unserved", value: metrics.unserved, icon: Ban, color: "text-muted-foreground" },
     { label: "Picked Up", value: metrics.pickedUp, icon: Bus, color: "text-secondary-foreground" },
     { label: "Virtual Stops", value: metrics.totalStops, icon: MapPin, color: "text-primary" },
     { label: "Route Assigns", value: metrics.busAssignments, icon: Route, color: "text-accent" },

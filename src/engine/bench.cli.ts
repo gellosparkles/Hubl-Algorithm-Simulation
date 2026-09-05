@@ -22,6 +22,9 @@ const NUMERIC_CONFIG_KEYS: (keyof Pick<
   | "maxStopsPerRoute"
   | "timeBudgetMinutes"
   | "maxWaitMinutes"
+  | "hubCatchmentKm"
+  | "rideTimeFactor"
+  | "rideTimeSlackMin"
 >)[] = [
   "numBuses",
   "avgRequestsPerMin",
@@ -32,6 +35,9 @@ const NUMERIC_CONFIG_KEYS: (keyof Pick<
   "maxStopsPerRoute",
   "timeBudgetMinutes",
   "maxWaitMinutes",
+  "hubCatchmentKm",
+  "rideTimeFactor",
+  "rideTimeSlackMin",
 ];
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -56,12 +62,13 @@ function fmt(n: number | null, digits = 1): string {
 }
 
 function printTable(agg: BenchAggregate): void {
-  const headers = ["seed", "reqs", "done", "pend", "svc%", "waitP50", "waitP90", "detour", "vehKm", "occ", "stops", "asgn"];
+  const headers = ["seed", "reqs", "done", "pend", "unsv", "svc%", "waitP50", "waitP90", "detour", "vehKm", "occ", "stops", "asgn"];
   const rows = agg.perSeed.map((k) => [
     String(k.seed),
     String(k.totalRequests),
     String(k.completed),
     String(k.pending),
+    String(k.unserved),
     fmt(k.serviceRate * 100, 1),
     fmt(k.waitP50Min),
     fmt(k.waitP90Min),
@@ -78,6 +85,7 @@ function printTable(agg: BenchAggregate): void {
     fmt(m.totalRequests, 0),
     fmt(m.completed, 0),
     fmt(m.pending, 0),
+    fmt(m.unserved, 0),
     fmt(m.serviceRate * 100, 1),
     fmt(m.waitP50Min),
     fmt(m.waitP90Min),

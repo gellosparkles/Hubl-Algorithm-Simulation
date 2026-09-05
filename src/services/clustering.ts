@@ -24,8 +24,12 @@ export function clusterRidersIntoStops(
   maxWalkKm: number,
   minGroupSize: number
 ): ClusterResult {
+  // Only inbound riders form origin-anchored stops here. Outbound riders board
+  // at a hub, which this greedy origin-clustering can't express — they wait for
+  // the direction-aware dispatcher (plan.md Phase 3). Unserved riders are
+  // terminal and never appear as `pending`.
   const pending = Object.values(requests)
-    .filter((r) => r.status === "pending" && r.assignedStop === null)
+    .filter((r) => r.status === "pending" && r.assignedStop === null && r.direction === "inbound")
     .sort((a, b) => a.tRequest - b.tRequest);
 
   const used = new Set<number>();
@@ -39,6 +43,8 @@ export function clusterRidersIntoStops(
     const group: RiderRequest[] = [];
     for (const r of pending) {
       if (used.has(r.id)) continue;
+      // Never pool riders bound for different hubs, even on the same corner.
+      if (r.hubIndex !== anchor.hubIndex) continue;
       if (haversine(anchor.origin, r.origin) <= maxWalkKm) {
         group.push(r);
       }

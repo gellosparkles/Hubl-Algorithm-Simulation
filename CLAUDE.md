@@ -98,14 +98,17 @@ When comparing algorithm variants, hold the seed fixed and change one parameter.
 seeds before believing a result — one seed is an anecdote.
 
 **Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
-with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~352 requests, **~314 still
-pending, ~5 completed**, ~79 stops, ~10 bus assignments. These ETAs are honest (detour factor +
-time-of-day speed profile) rather than the old optimistic straight-line estimate, so throughput
-looks worse than earlier baselines despite no planner/clustering change — that's expected, not a
-regression. Throughput is the obvious optimization target — most riders never get served. Record
-metrics before and after any planner/clustering change rather than judging by watching the map,
-and note which `TravelTimeProvider` a benchmark used since haversine and Google runs aren't
-comparable.
+with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~222 pending,
+~124 unserved, ~0 completed**, ~12 stops, ~8 bus assignments. This baseline moved again with the
+trip model (issue #3): destinations are now real, and requests split roughly ⅓ inbound / ⅓
+outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only inbound riders
+currently cluster — outbound needs board-at-hub routing, so ~124 of the ~222 `pending` are
+outbound riders parked until the Phase 3 dispatcher. Completions are ~0 over 60 min because the
+single-shot origin-clustering planner can't finish many hub deliveries in the horizon (and
+`pickedUp` plateaus near ~22 — buses stay locked until `busyUntil`); completions reach ~10 by
+120 min. Throughput is the Phase 3 target. Record metrics before and after any planner/clustering change
+rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
+since haversine and Google runs aren't comparable.
 
 ### Test layout
 

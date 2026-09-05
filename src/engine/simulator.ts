@@ -16,6 +16,7 @@ import {
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
 import { createTravelTimeProvider } from "@/services/travelTime";
+import { classifyRequest } from "./tripModel";
 import { Rng, createRng, randomSeed } from "./rng";
 
 // decode Google encoded polyline into coordinate array
@@ -173,7 +174,7 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     stops: {},
     dropOffHubs: [],
     eventLog: [],
-    metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, totalRequests: 0, totalStops: 0 },
+    metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, unserved: 0, totalRequests: 0, totalStops: 0 },
     running: false,
     rngState: rng.state,
     travelTimeProviderDegraded: false,
@@ -197,6 +198,10 @@ export async function simulateStep(
   // to s.rngState at the end so the next step continues deterministically.
   const rng = createRng(s.rngState);
 
+  // One provider per tick (see the batch-warming note at step 4). Created up
+  // front because rider classification at step 2 needs it too.
+  const travelTime = createTravelTimeProvider(config);
+
   // 1. Advance bus positions along their routes & complete finished routes
   for (const bus of Object.values(s.buses)) {
     if (!bus.available && bus.busyUntil <= s.time) {
@@ -208,7 +213,10 @@ export async function simulateStep(
       bus.positionHistory.push({ ...bus.position });
       // Mark riders whose drop-off stop was reached as completed
       for (const rid of bus.onboard) {
-        if (s.requests[rid]) s.requests[rid].status = "completed";
+        if (s.requests[rid]) {
+          s.requests[rid].status = "completed";
+          s.requests[rid].tDroppedOff = s.time;
+        }
       }
       bus.onboard = [];
       bus.available = true;
@@ -268,15 +276,25 @@ export async function simulateStep(
   for (let i = 0; i < n; i++) {
     const origin = weightedRandomPoint(config, rng);
     const dest = weightedRandomPoint(config, rng);
+    const trip = classifyRequest(origin, dest, s.time, s.dropOffHubs, config, travelTime);
     const r: RiderRequest = {
       id: nextReqId++,
       tRequest: s.time,
       origin,
       destination: dest,
+      direction: trip.direction,
+      hubIndex: trip.hubIndex,
       assignedStop: null,
       assignedBus: null,
-      status: "pending",
+      // `unserved` is terminal — never clustered, never pending forever.
+      status: trip.direction === "unserved" ? "unserved" : "pending",
       walkDistanceKm: null,
+      tAssigned: null,
+      tPickedUp: null,
+      tDroppedOff: null,
+      promisedPickupBy: trip.promisedPickupBy,
+      directTimeMin: trip.directTimeMin,
+      maxRideTimeMin: trip.maxRideTimeMin,
       incentive: 0,
     };
     s.requests[r.id] = r;
@@ -290,10 +308,11 @@ export async function simulateStep(
     config.minGroupSize
   );
   for (const stop of newStops) {
-    // Randomly assign a drop-off hub if hubs exist
-    if (s.dropOffHubs.length > 0) {
-      stop.dropOffHubIndex = Math.floor(rng.next() * s.dropOffHubs.length);
-    }
+    // The hub is the one its riders were classified against — never random.
+    // clusterRidersIntoStops only groups riders sharing a hubIndex, so any
+    // member's is the stop's.
+    const anchorRider = stop.riderIds.map((rid) => s.requests[rid]).find((r) => r?.hubIndex != null);
+    stop.dropOffHubIndex = anchorRider?.hubIndex ?? null;
     s.stops[stop.id] = stop;
     log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders${stop.dropOffHubIndex != null ? ` → hub ${stop.dropOffHubIndex + 1}` : ""}`);
   }
@@ -320,8 +339,6 @@ export async function simulateStep(
   // 4. Assign routes to available buses
   let openStops = Object.values(s.stops).filter((st) => st.status === "open");
   openStops.sort((a, b) => a.createdAt - b.createdAt);
-
-  const travelTime = createTravelTimeProvider(config);
 
   // planRoute below calls travelTime.time() synchronously, per leg, as its
   // greedy search discovers each next stop — that can never itself be the
@@ -367,6 +384,9 @@ export async function simulateStep(
           if (s.requests[rid] && s.requests[rid].status === "pending") {
             s.requests[rid].status = "picked_up";
             s.requests[rid].assignedBus = bus.id;
+            s.requests[rid].tAssigned = s.time;
+            // TODO(#4): tPickedUp should mean physical arrival, not assignment.
+            s.requests[rid].tPickedUp = s.time;
             bus.onboard.push(rid);
           }
         }
@@ -386,6 +406,7 @@ export async function simulateStep(
     completed: reqs.filter((r) => r.status === "completed").length,
     pending: reqs.filter((r) => r.status === "pending").length,
     pickedUp: reqs.filter((r) => r.status === "picked_up").length,
+    unserved: reqs.filter((r) => r.status === "unserved").length,
     totalRequests: reqs.length,
     totalStops: Object.keys(s.stops).length,
   };

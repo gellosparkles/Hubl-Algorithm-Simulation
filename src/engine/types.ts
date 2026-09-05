@@ -21,15 +21,35 @@ export interface Bus {
   positionHistory: LatLng[]; // trail of past positions
 }
 
+/**
+ * A request's relationship to its anchor hub, decided from real geography at
+ * request time (never random). See src/engine/tripModel.ts.
+ *  - inbound:  collect near the origin, deliver to the hub
+ *  - outbound: board at the hub, alight near the destination
+ *  - unserved: neither end sits inside a hub catchment — a first-class KPI
+ *              outcome, not a rider left pending forever
+ */
+export type TripDirection = "inbound" | "outbound" | "unserved";
+
 export interface RiderRequest {
   id: number;
   tRequest: number; // minute submitted
   origin: LatLng;
   destination: LatLng;
+  direction: TripDirection;
+  hubIndex: number | null; // anchor hub — derived from geography, never random
   assignedStop: number | null;
   assignedBus: number | null;
-  status: "pending" | "picked_up" | "completed";
+  status: "pending" | "picked_up" | "completed" | "unserved";
   walkDistanceKm: number | null;
+  // ── lifecycle timestamps (sim minute; null until the transition happens) ──
+  tAssigned: number | null;
+  tPickedUp: number | null; // TODO(#4): physical arrival; today set at assignment
+  tDroppedOff: number | null;
+  // ── promise fields feasibility work (#4, #5) depends on ──
+  promisedPickupBy: number; // tRequest + maxWaitMinutes
+  directTimeMin: number; // provider.time(origin, destination) at tRequest
+  maxRideTimeMin: number; // directTimeMin * rideTimeFactor + rideTimeSlackMin
   incentive: number;
 }
 
@@ -74,6 +94,11 @@ export interface SimConfig {
   detourFactor: number;
   /** Time-of-day speed profile used by the default TravelTimeProvider. */
   speedProfile: SpeedProfile;
+  /** A request end must be within this many km of a hub to anchor to it (tripModel classification). */
+  hubCatchmentKm: number;
+  /** Promised max ride time = directTimeMin * rideTimeFactor + rideTimeSlackMin. */
+  rideTimeFactor: number;
+  rideTimeSlackMin: number;
   /** Fixed RNG seed for reproducible runs; null draws a fresh seed each reset. */
   seed: number | null;
 }
@@ -83,6 +108,8 @@ export interface SimMetrics {
   completed: number;
   pending: number;
   pickedUp: number;
+  /** Requests classified `unserved` at request time — reported distinctly from riders still waiting. */
+  unserved: number;
   totalRequests: number;
   totalStops: number;
 }
@@ -131,5 +158,8 @@ export const DEFAULT_CONFIG: SimConfig = {
   googleApiKey: "",
   detourFactor: 1.35,
   speedProfile: { offPeakKmh: 32, peakKmh: 18, peakStartMin: 420, peakEndMin: 600 },
+  hubCatchmentKm: 8,
+  rideTimeFactor: 1.5,
+  rideTimeSlackMin: 5,
   seed: null,
 };

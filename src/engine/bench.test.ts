@@ -26,7 +26,7 @@ describe("runBenchSeed", () => {
 
   it("keeps rider status accounting consistent with the total", async () => {
     const k = await runBenchSeed({}, 42, 30);
-    expect(k.completed + k.pending + k.pickedUp).toBe(k.totalRequests);
+    expect(k.completed + k.pending + k.pickedUp + k.unserved).toBe(k.totalRequests);
   });
 
   it("never reports a negative wait or detour ratio", async () => {

@@ -34,8 +34,10 @@ export interface BenchKpis {
   completed: number;
   pending: number;
   pickedUp: number;
+  unserved: number; // classified `unserved` at request time
   serviceRate: number; // completed / totalRequests
-  unservedRate: number; // pending / totalRequests, at horizon end
+  unservedRate: number; // unserved / totalRequests — trips with no hub-anchored path
+  pendingRate: number; // pending / totalRequests, at horizon end
   waitP50Min: number | null;
   waitP90Min: number | null;
   detourRatioMean: number | null;
@@ -157,8 +159,10 @@ export async function runBenchSeed(
     completed: s.metrics.completed,
     pending: s.metrics.pending,
     pickedUp: s.metrics.pickedUp,
+    unserved: s.metrics.unserved,
     serviceRate: totalRequests ? s.metrics.completed / totalRequests : 0,
-    unservedRate: totalRequests ? s.metrics.pending / totalRequests : 0,
+    unservedRate: totalRequests ? s.metrics.unserved / totalRequests : 0,
+    pendingRate: totalRequests ? s.metrics.pending / totalRequests : 0,
     waitP50Min: waits.length ? median(waits) : null,
     waitP90Min: waits.length ? percentile(waits, 90) : null,
     detourRatioMean: detours.length ? mean(detours) : null,
@@ -190,8 +194,10 @@ export async function runBenchSweep(
     completed: mean(pick((k) => k.completed)),
     pending: mean(pick((k) => k.pending)),
     pickedUp: mean(pick((k) => k.pickedUp)),
+    unserved: mean(pick((k) => k.unserved)),
     serviceRate: mean(pick((k) => k.serviceRate)),
     unservedRate: mean(pick((k) => k.unservedRate)),
+    pendingRate: mean(pick((k) => k.pendingRate)),
     waitP50Min: pick((k) => k.waitP50Min).length ? mean(pick((k) => k.waitP50Min)) : null,
     waitP90Min: pick((k) => k.waitP90Min).length ? mean(pick((k) => k.waitP90Min)) : null,
     detourRatioMean: pick((k) => k.detourRatioMean).length ? mean(pick((k) => k.detourRatioMean)) : null,
