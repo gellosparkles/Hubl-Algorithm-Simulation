@@ -37,7 +37,7 @@ src/engine/types.ts         All domain types + LA_BOUNDS + DEFAULT_CONFIG. Start
 src/engine/simulator.ts     The clock. simulateStep(state, config) -> Promise<SimState>
 src/engine/rng.ts           Seeded mulberry32 PRNG; state is one int, so it clones
 src/engine/simulator.test.ts  Determinism + invariant tests (node env)
-src/services/clustering.ts  Riders -> virtual stops (greedy radius grouping)
+src/services/stops.ts       Riders -> persistent virtual stops keyed by ~150m grid cell (issue #5)
 src/services/planner.ts     Stops -> bus routes (greedy nearest-neighbor + drop-off legs)
 src/services/routing.ts     haversine fallback / Google DirectionsService wrapper
 src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state
@@ -51,10 +51,12 @@ src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
    board/alight riders at each entry whose `etaMin` has elapsed; retire a plan once its last entry is reached
 2. Generate new riders — `poissonSample(avgRequestsPerMin)`, positions from `weightedRandomPoint`
    (60% clustered on 8 LA hotspots, 40% uniform, rejection-sampled against a coastline polygon)
-3. Cluster pending riders into stops (`clusterRidersIntoStops`)
-4. Expire open stops older than `maxWaitMinutes`; their riders return to `pending`
-5. Assign a `PlanStop[]` itinerary to each idle bus (`planRoute`) — idle means `bus.plan.length === 0`
-6. Recompute metrics, `time += 1`
+3. Fold pending riders into the persistent grid-snapped stop set (`maintainStops`) — stops are
+   keyed `(gridCellId, direction, hubIndex)` and live across ticks; a later rider in the same cell
+   joins the existing stop. Empty stops are retired; no max-wait expiry (issue #5)
+4. Assign a `PlanStop[]` itinerary to each idle bus (`planRoute`), inbound stops only — idle means
+   `bus.plan.length === 0`
+5. Recompute metrics, `time += 1`
 
 **Rider lifecycle:** `pending` → `picked_up` → `completed`. Since issue #4, `picked_up` is set when the
 bus physically reaches the rider's stop and `completed` at that rider's own drop-off — so `tRequest`,
@@ -101,18 +103,17 @@ When comparing algorithm variants, hold the seed fixed and change one parameter.
 seeds before believing a result — one seed is an anecdote.
 
 **Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
-with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~232 pending,
-~124 unserved, ~0 completed**, ~10 stops, ~8 bus assignments. Requests split roughly ⅓ inbound / ⅓
-outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only inbound riders
-currently cluster — outbound needs board-at-hub routing, so ~124 of the ~232 `pending` are
-outbound riders parked until the Phase 3 dispatcher. Completions are ~0 over 60 min because the
-single-shot origin-clustering planner can't finish many hub deliveries in the horizon; they reach
-~10 by 120 min. The issue-#4 prefactor left request generation and greedy planning untouched, but moved the
-KPIs downstream of the lifecycle fix: `waitP50` jumped ~3→~20 min ("wait" is now
-request→physical boarding, not request→assignment), `meanOccupancy` fell (riders board late), and
-`totalStops` dropped ~12→~10 (hub visits are itinerary entries now, so negative-id stops no longer
-pollute `s.stops` — a meaning change, not a clustering regression). Throughput is the Phase 3
-target. Record metrics before and after any planner/clustering change
+with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~227 pending,
+~124 unserved, ~4 completed**, ~234 stops, ~12 bus assignments. Requests split roughly ⅓ inbound / ⅓
+outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only inbound stops are
+dispatched — outbound needs board-at-hub routing, so ~124 of the ~227 `pending` are
+outbound riders parked until the Phase 3 dispatcher. Completions are near zero over 60 min because the
+single-shot greedy planner can't finish many hub deliveries in the horizon.
+The issue-#5 change (persistent grid-snapped stops, `minGroupSize` default 1) inflated
+`totalStops` ~10→~234: every occupied ~150 m cell — inbound *and* outbound, lone riders included —
+is now one stable stop that lives across ticks instead of a per-tick centroid that expired and
+re-formed. That is a meaning change, not a regression; throughput is still the Phase 3
+target. Record metrics before and after any planner/stops change
 rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
 since haversine and Google runs aren't comparable.
 
@@ -147,7 +148,7 @@ only the build and test scaffolding is tied to the platform.
 
 ## Gotchas
 
-- **Module-level ID counters.** `nextReqId` in `simulator.ts` and `nextStopId` in `clustering.ts`
+- **Module-level ID counters.** `nextReqId` in `simulator.ts` and `nextStopId` in `stops.ts`
   are still module globals, but `createInitialState()` now resets **both**, so IDs no longer leak
   between runs. They remain shared across concurrent simulations in one process — IDs will
   interleave if you run two sims at once, though `rngState` keeps the *simulations* independent.

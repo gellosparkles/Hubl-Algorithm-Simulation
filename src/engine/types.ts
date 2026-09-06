@@ -65,11 +65,14 @@ export interface RiderRequest {
   promisedPickupBy: number; // tRequest + maxWaitMinutes
   directTimeMin: number; // provider.time(origin, destination) at tRequest
   maxRideTimeMin: number; // directTimeMin * rideTimeFactor + rideTimeSlackMin
-  incentive: number;
 }
 
 export interface VirtualStop {
   id: number;
+  /** `(gridCellId, direction, hubIndex)` composite — stable across ticks; a later
+   *  rider in the same cell joins this stop rather than spawning a duplicate (issue #5). */
+  groupKey: string;
+  direction: TripDirection;
   position: LatLng;
   riderIds: number[];
   createdAt: number;
@@ -164,7 +167,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   busCapacity: 12,
   busSpeed: 35,
   maxWalkKm: 0.5,
-  minGroupSize: 2,
+  minGroupSize: 1,
   maxStopsPerRoute: 5,
   timeBudgetMinutes: 25,
   maxWaitMinutes: 10,

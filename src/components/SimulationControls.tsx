@@ -266,7 +266,7 @@ export default function SimulationControls({
               <span className="text-xs font-mono text-sidebar-primary">{config.minGroupSize}</span>
             </div>
             <Slider
-              min={2} max={6} step={1}
+              min={1} max={6} step={1}
               value={[config.minGroupSize]}
               onValueChange={([v]) => update({ minGroupSize: v })}
               disabled={running}

@@ -13,7 +13,7 @@ import {
   SimMetrics,
   DEFAULT_CONFIG,
 } from "./types";
-import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
+import { maintainStops, resetStopCounter } from "@/services/stops";
 import { planRoute } from "@/services/planner";
 import { createTravelTimeProvider } from "@/services/travelTime";
 import { haversine } from "@/services/routing";
@@ -266,49 +266,28 @@ export async function simulateStep(
       promisedPickupBy: trip.promisedPickupBy,
       directTimeMin: trip.directTimeMin,
       maxRideTimeMin: trip.maxRideTimeMin,
-      incentive: 0,
     };
     s.requests[r.id] = r;
   }
 
-  // 3. Cluster pending riders into virtual stops
-  const { newStops, updatedRequests } = clusterRidersIntoStops(
-    s.requests,
-    s.time,
-    config.maxWalkKm,
-    config.minGroupSize
-  );
-  for (const stop of newStops) {
-    // The hub is the one its riders were classified against — never random.
-    // clusterRidersIntoStops only groups riders sharing a hubIndex, so any
-    // member's is the stop's.
-    const anchorRider = stop.riderIds.map((rid) => s.requests[rid]).find((r) => r?.hubIndex != null);
-    stop.dropOffHubIndex = anchorRider?.hubIndex ?? null;
-    s.stops[stop.id] = stop;
-    log.push(`t=${s.time}: formed stop ${stop.id} with ${stop.riderIds.length} riders${stop.dropOffHubIndex != null ? ` → hub ${stop.dropOffHubIndex + 1}` : ""}`);
-  }
+  // 3. Fold pending riders into the persistent grid-snapped stop set. Stops are
+  //    keyed by (cell, direction, hub) and live across ticks — no per-tick
+  //    re-clustering, no expiry churn (issue #5). A rider's promised-pickup
+  //    deadline, not a stop lifetime, is the wait bound now.
+  const { updatedRequests, log: stopLog } = maintainStops(s.requests, s.stops, s.time, config);
+  for (const line of stopLog) log.push(`t=${s.time}: ${line}`);
   for (const [ridStr, updates] of Object.entries(updatedRequests)) {
     const rid = Number(ridStr);
     if (s.requests[rid]) Object.assign(s.requests[rid], updates);
   }
 
-  // 3b. Expire open stops that exceeded max wait time
-  for (const stop of Object.values(s.stops)) {
-    if (stop.status === "open" && (s.time - stop.createdAt) >= config.maxWaitMinutes) {
-      // mark riders back to pending (unassigned) so they can be re-clustered, then remove stop
-      for (const rid of stop.riderIds) {
-        if (s.requests[rid]) {
-          s.requests[rid].assignedStop = null;
-          s.requests[rid].status = "pending";
-        }
-      }
-      log.push(`t=${s.time}: stop ${stop.id} expired (waited ${config.maxWaitMinutes} min)`);
-      delete s.stops[stop.id];
-    }
-  }
-
-  // 4. Assign routes to idle buses
-  let openStops = Object.values(s.stops).filter((st) => st.status === "open");
+  // 4. Assign routes to idle buses. Only inbound stops are dispatchable here:
+  //    the greedy planner boards riders at the stop, which is wrong for outbound
+  //    (they board at the hub). Outbound stops still persist in s.stops for the
+  //    Phase 3 direction-aware dispatcher (issue #7).
+  let openStops = Object.values(s.stops).filter(
+    (st) => st.status === "open" && st.direction === "inbound"
+  );
   openStops.sort((a, b) => a.createdAt - b.createdAt);
 
   // planRoute below calls travelTime.time() synchronously, per leg, as its
