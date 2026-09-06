@@ -47,16 +47,19 @@ src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
 
 **One tick of `simulateStep`**, in order:
 
-1. Advance buses along `decodedLegs` by interpolation; complete routes whose `busyUntil` elapsed
+1. Advance buses along `Bus.plan` (a `PlanStop[]` itinerary) by interpolating the current leg;
+   board/alight riders at each entry whose `etaMin` has elapsed; retire a plan once its last entry is reached
 2. Generate new riders — `poissonSample(avgRequestsPerMin)`, positions from `weightedRandomPoint`
    (60% clustered on 8 LA hotspots, 40% uniform, rejection-sampled against a coastline polygon)
 3. Cluster pending riders into stops (`clusterRidersIntoStops`)
 4. Expire open stops older than `maxWaitMinutes`; their riders return to `pending`
-5. Assign routes to available buses (`planRoute`)
+5. Assign a `PlanStop[]` itinerary to each idle bus (`planRoute`) — idle means `bus.plan.length === 0`
 6. Recompute metrics, `time += 1`
 
-**Rider lifecycle:** `pending` → `picked_up` → `completed`. Note `picked_up` is set at *route
-assignment* time, not at physical arrival; `completed` is set when the whole route finishes.
+**Rider lifecycle:** `pending` → `picked_up` → `completed`. Since issue #4, `picked_up` is set when the
+bus physically reaches the rider's stop and `completed` at that rider's own drop-off — so `tRequest`,
+`tPickedUp`, `tDroppedOff` are real quantities. `tAssigned` still records planning time (a rider can be
+assigned to a bus while still `pending`).
 
 ## Testing and iterating the algorithm without Lovable
 
@@ -98,15 +101,16 @@ When comparing algorithm variants, hold the seed fixed and change one parameter.
 seeds before believing a result — one seed is an anecdote.
 
 **Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
-with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~222 pending,
-~124 unserved, ~0 completed**, ~12 stops, ~8 bus assignments. This baseline moved again with the
-trip model (issue #3): destinations are now real, and requests split roughly ⅓ inbound / ⅓
+with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~232 pending,
+~124 unserved, ~0 completed**, ~10 stops, ~8 bus assignments. Requests split roughly ⅓ inbound / ⅓
 outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only inbound riders
-currently cluster — outbound needs board-at-hub routing, so ~124 of the ~222 `pending` are
+currently cluster — outbound needs board-at-hub routing, so ~124 of the ~232 `pending` are
 outbound riders parked until the Phase 3 dispatcher. Completions are ~0 over 60 min because the
-single-shot origin-clustering planner can't finish many hub deliveries in the horizon (and
-`pickedUp` plateaus near ~22 — buses stay locked until `busyUntil`); completions reach ~10 by
-120 min. Throughput is the Phase 3 target. Record metrics before and after any planner/clustering change
+single-shot origin-clustering planner can't finish many hub deliveries in the horizon; they reach
+~10 by 120 min. The issue-#4 prefactor moved the lifecycle-dependent KPIs (`waitP50` jumped ~3→~20
+min because "wait" is now request→physical boarding, not request→assignment; `meanOccupancy` fell
+because riders board late) but left request generation and planning untouched. Throughput is the
+Phase 3 target. Record metrics before and after any planner/clustering change
 rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
 since haversine and Google runs aren't comparable.
 

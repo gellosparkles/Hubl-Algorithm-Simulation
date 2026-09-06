@@ -92,9 +92,9 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       ctx.setLineDash([]);
     });
 
-    // ── Draw active route paths (decoded road legs) ──
+    // ── Draw active route paths (itinerary legs) ──
     busEntries.forEach((bus, idx) => {
-      if (bus.decodedLegs.length === 0) return;
+      if (bus.plan.length === 0) return;
       const color = ROUTE_COLORS[idx % ROUTE_COLORS.length];
 
       ctx.strokeStyle = color;
@@ -102,8 +102,8 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       ctx.setLineDash([]);
       ctx.beginPath();
       let started = false;
-      for (const leg of bus.decodedLegs) {
-        for (const pt of leg) {
+      for (const ps of bus.plan) {
+        for (const pt of ps.legPath) {
           if (!started) {
             ctx.moveTo(toX(pt.lng), toY(pt.lat));
             started = true;
@@ -114,12 +114,10 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       }
       ctx.stroke();
 
-      // Draw numbered waypoints along the route
-      bus.route.forEach((sid, stopIdx) => {
-        const stop = state.stops[sid];
-        if (!stop) return;
-        const sx = toX(stop.position.lng);
-        const sy = toY(stop.position.lat);
+      // Draw numbered waypoints along the itinerary
+      bus.plan.forEach((ps, stopIdx) => {
+        const sx = toX(ps.position.lng);
+        const sy = toY(ps.position.lat);
 
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -134,9 +132,8 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       });
     });
 
-    // ── Draw stops (pickup only) ──
+    // ── Draw stops ──
     for (const stop of Object.values(state.stops)) {
-      if (stop.isDropOff) continue;
       const x = toX(stop.position.lng);
       const y = toY(stop.position.lat);
       const isOpen = stop.status === "open";
@@ -193,7 +190,7 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
     for (const bus of busEntries) {
       const x = toX(bus.position.lng);
       const y = toY(bus.position.lat);
-      ctx.fillStyle = bus.available ? "#1a8cff" : "#2db87a";
+      ctx.fillStyle = bus.plan.length === 0 ? "#1a8cff" : "#2db87a";
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2;
       ctx.beginPath();

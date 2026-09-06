@@ -5,21 +5,24 @@
  * that fits within capacity and time budget, repeating until done.
  * After pickups, appends drop-off legs to assigned drop-off hubs.
  *
+ * This is a prefactor (issue #4): the greedy logic below is unchanged — it now
+ * emits one ordered `PlanStop[]` itinerary instead of four parallel arrays, and
+ * hub visits are itinerary entries rather than fake negative-id stops written
+ * into the shared stop map.
+ *
  * Travel time (the number the dispatcher trusts for budgets and ETAs) always
  * comes from a TravelTimeProvider. When Google routing is available, its
  * DirectionsService additionally supplies road-snapped polylines for display,
  * but never overrides the provider's duration — see plan.md Phase 1.
  */
 
-import { Bus, LatLng, RiderRequest, VirtualStop, SimConfig } from "@/engine/types";
+import { Bus, LatLng, PlanStop, RiderRequest, VirtualStop, SimConfig } from "@/engine/types";
 import { haversine, getDirections } from "@/services/routing";
 import { TravelTimeProvider } from "@/services/travelTime";
 
-interface PlanResult {
-  route: VirtualStop[];
-  etas: number[];
-  polylines: string[];
-  decodedLegs: LatLng[][]; // road-snapped points per leg
+/** Straight L-shaped grid path, used for display when no road geometry is available. */
+function gridPath(from: LatLng, to: LatLng): LatLng[] {
+  return [{ ...from }, { lat: from.lat, lng: to.lng }, { ...to }];
 }
 
 export async function planRoute(
@@ -30,19 +33,17 @@ export async function planRoute(
   travelTime: TravelTimeProvider,
   dropOffHubs: LatLng[] = [],
   now = 0
-): Promise<PlanResult> {
-  const route: VirtualStop[] = [];
-  const etas: number[] = [];
-  const polylines: string[] = [];
-  const decodedLegs: LatLng[][] = [];
+): Promise<PlanStop[]> {
+  const plan: PlanStop[] = [];
 
   let cap = bus.capacity - bus.onboard.length;
+  let load = bus.onboard.length;
   let cur = { ...bus.position };
   let t = 0;
   const candidates = [...openStops];
 
   // ── Phase 1: Pickup stops (greedy nearest-neighbor) ──
-  while (candidates.length > 0 && cap > 0 && route.length < config.maxStopsPerRoute) {
+  while (candidates.length > 0 && cap > 0 && plan.length < config.maxStopsPerRoute) {
     let bestIdx = -1;
     let bestDist = Infinity;
 
@@ -66,7 +67,7 @@ export async function planRoute(
     const travelMin = travelTime.time(cur, best.position, now + t);
     const pickupMin = 1 + 0.2 * best.riderIds.length;
 
-    if (route.length > 0 && t + travelMin + pickupMin > config.timeBudgetMinutes) break;
+    if (plan.length > 0 && t + travelMin + pickupMin > config.timeBudgetMinutes) break;
 
     // Get road-snapped path if Google routing enabled — geometry only, never timing.
     let polyline = "";
@@ -80,32 +81,37 @@ export async function planRoute(
         // fallback: no polyline
       }
     }
-
-    // If no road path available, generate L-shaped grid path
-    if (legPath.length < 2) {
-      const midpoint: LatLng = { lat: cur.lat, lng: best.position.lng };
-      legPath = [{ ...cur }, midpoint, { ...best.position }];
-    }
+    if (legPath.length < 2) legPath = gridPath(cur, best.position);
 
     t += travelMin + pickupMin;
-    route.push(best);
-    etas.push(Math.ceil(t));
-    polylines.push(polyline);
-    decodedLegs.push(legPath);
 
-    cap -= best.riderIds.filter((rid) => requests[rid]?.status === "pending").length;
+    const boarding = best.riderIds.filter((rid) => requests[rid]?.status === "pending");
+    load += boarding.length;
+    plan.push({
+      kind: "pickup",
+      position: { ...best.position },
+      stopId: best.id,
+      hubIndex: best.dropOffHubIndex,
+      boarding,
+      alighting: [],
+      etaMin: now + Math.ceil(t),
+      loadAfter: load,
+      polyline,
+      legPath,
+    });
+
+    cap -= boarding.length;
     cur = { ...best.position };
     candidates.splice(bestIdx, 1);
   }
 
   // ── Phase 2: Drop-off legs ──
   // Collect unique drop-off hub indices from the picked-up stops
-  if (dropOffHubs.length > 0 && route.length > 0) {
+  const pickups = plan.filter((p) => p.kind === "pickup");
+  if (dropOffHubs.length > 0 && pickups.length > 0) {
     const hubIndicesUsed = new Set<number>();
-    for (const stop of route) {
-      if (stop.dropOffHubIndex != null) {
-        hubIndicesUsed.add(stop.dropOffHubIndex);
-      }
+    for (const p of pickups) {
+      if (p.hubIndex != null) hubIndicesUsed.add(p.hubIndex);
     }
 
     // Sort hubs by distance from current position (greedy)
@@ -113,7 +119,6 @@ export async function planRoute(
       return haversine(cur, dropOffHubs[a]) - haversine(cur, dropOffHubs[b]);
     });
 
-    let dropOffStopIdBase = -1000; // negative IDs for drop-off "stops"
     for (const hubIdx of hubList) {
       const hubPos = dropOffHubs[hubIdx];
       const travelMin = travelTime.time(cur, hubPos, now + t);
@@ -128,44 +133,31 @@ export async function planRoute(
           legPath = dir.decodedPath;
         } catch { /* fallback */ }
       }
-
-      if (legPath.length < 2) {
-        const midpoint: LatLng = { lat: cur.lat, lng: hubPos.lng };
-        legPath = [{ ...cur }, midpoint, { ...hubPos }];
-      }
+      if (legPath.length < 2) legPath = gridPath(cur, hubPos);
 
       t += travelMin + unloadMin;
 
-      // Collect rider IDs being dropped off at this hub
-      const dropRiderIds: number[] = [];
-      for (const stop of route) {
-        if (stop.dropOffHubIndex === hubIdx) {
-          for (const rid of stop.riderIds) {
-            if (requests[rid]?.status === "pending") {
-              dropRiderIds.push(rid);
-            }
-          }
-        }
+      const alighting: number[] = [];
+      for (const p of pickups) {
+        if (p.hubIndex === hubIdx) alighting.push(...p.boarding);
       }
+      load -= alighting.length;
 
-      const dropOffStop: VirtualStop = {
-        id: dropOffStopIdBase--,
-        position: hubPos,
-        riderIds: dropRiderIds,
-        createdAt: 0,
-        assignedBus: bus.id,
-        status: "dropoff",
-        dropOffHubIndex: hubIdx,
-        isDropOff: true,
-      };
-
-      route.push(dropOffStop);
-      etas.push(Math.ceil(t));
-      polylines.push(polyline);
-      decodedLegs.push(legPath);
+      plan.push({
+        kind: "hub",
+        position: { ...hubPos },
+        stopId: null,
+        hubIndex: hubIdx,
+        boarding: [],
+        alighting,
+        etaMin: now + Math.ceil(t),
+        loadAfter: load,
+        polyline,
+        legPath,
+      });
       cur = { ...hubPos };
     }
   }
 
-  return { route, etas, polylines, decodedLegs };
+  return plan;
 }

@@ -16,24 +16,9 @@ import {
 import { clusterRidersIntoStops, resetStopCounter } from "@/services/clustering";
 import { planRoute } from "@/services/planner";
 import { createTravelTimeProvider } from "@/services/travelTime";
+import { haversine } from "@/services/routing";
 import { classifyRequest } from "./tripModel";
 import { Rng, createRng, randomSeed } from "./rng";
-
-// decode Google encoded polyline into coordinate array
-function decodePolyline(encoded: string): LatLng[] {
-  const points: LatLng[] = [];
-  let index = 0, lat = 0, lng = 0;
-  while (index < encoded.length) {
-    let b, shift = 0, result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-    shift = 0; result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
-  }
-  return points;
-}
 
 // interpolate along a polyline path by fraction (0..1)
 function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
@@ -41,12 +26,10 @@ function interpolateAlongPath(path: LatLng[], fraction: number): LatLng {
   if (path.length === 1 || fraction <= 0) return path[0];
   if (fraction >= 1) return path[path.length - 1];
 
-  // compute cumulative distances
+  // cumulative distances, in metres — degree deltas are not distances (issue #4)
   const dists: number[] = [0];
   for (let i = 1; i < path.length; i++) {
-    const dlat = path[i].lat - path[i - 1].lat;
-    const dlng = path[i].lng - path[i - 1].lng;
-    dists.push(dists[i - 1] + Math.sqrt(dlat * dlat + dlng * dlng));
+    dists.push(dists[i - 1] + haversine(path[i - 1], path[i]));
   }
   const totalDist = dists[dists.length - 1];
   if (totalDist === 0) return path[0];
@@ -156,13 +139,10 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
       routeStartPosition: pos,
       capacity: config.busCapacity,
       speed: config.busSpeed,
-      available: true,
-      route: [],
-      routeEtas: [],
-      routePolylines: [],
-      decodedLegs: [],
+      plan: [],
+      legIndex: 0,
+      legStartedAt: 0,
       onboard: [],
-      busyUntil: 0,
       positionHistory: [],
     };
   }
@@ -202,72 +182,53 @@ export async function simulateStep(
   // front because rider classification at step 2 needs it too.
   const travelTime = createTravelTimeProvider(config);
 
-  // 1. Advance bus positions along their routes & complete finished routes
+  // 1. Advance buses along their itineraries; board and alight riders on arrival
   for (const bus of Object.values(s.buses)) {
-    if (!bus.available && bus.busyUntil <= s.time) {
-      // route complete — snap to last stop position
-      const lastStopId = bus.route[bus.route.length - 1];
-      if (lastStopId != null && s.stops[lastStopId]) {
-        bus.position = { ...s.stops[lastStopId].position };
+    if (bus.plan.length === 0) continue;
+
+    // Process every itinerary entry whose ETA has now elapsed. Riders board
+    // when the bus physically reaches their stop and alight at their own
+    // drop-off — not in bulk at route end (issue #4).
+    while (bus.legIndex < bus.plan.length && s.time >= bus.plan[bus.legIndex].etaMin) {
+      const ps = bus.plan[bus.legIndex];
+      bus.position = { ...ps.position };
+      for (const rid of ps.boarding) {
+        const r = s.requests[rid];
+        if (r && r.status === "pending") {
+          r.status = "picked_up";
+          r.tPickedUp = s.time;
+          bus.onboard.push(rid);
+        }
       }
+      for (const rid of ps.alighting) {
+        const r = s.requests[rid];
+        if (r && r.status === "picked_up") {
+          r.status = "completed";
+          r.tDroppedOff = s.time;
+        }
+        bus.onboard = bus.onboard.filter((id) => id !== rid);
+      }
+      bus.legStartedAt = ps.etaMin;
+      bus.legIndex += 1;
+    }
+
+    if (bus.legIndex >= bus.plan.length) {
+      // itinerary complete — snap to the final stop and go idle
+      bus.plan = [];
+      bus.legIndex = 0;
       bus.positionHistory.push({ ...bus.position });
-      // Mark riders whose drop-off stop was reached as completed
-      for (const rid of bus.onboard) {
-        if (s.requests[rid]) {
-          s.requests[rid].status = "completed";
-          s.requests[rid].tDroppedOff = s.time;
-        }
-      }
-      bus.onboard = [];
-      bus.available = true;
-      bus.route = [];
-      bus.routeEtas = [];
-      bus.routePolylines = [];
-      bus.decodedLegs = [];
-    } else if (!bus.available && bus.route.length > 0) {
-      // interpolate position along route based on elapsed time
-      const routeStart = bus.busyUntil - (bus.routeEtas[bus.routeEtas.length - 1] || 0) - 5;
-      const elapsed = s.time - routeStart;
-
-      // find which leg we're on
-      let legIdx = 0;
-      for (let i = 0; i < bus.routeEtas.length; i++) {
-        if (elapsed < bus.routeEtas[i]) {
-          legIdx = i;
-          break;
-        }
-        legIdx = i;
-      }
-
-      const prevEta = legIdx > 0 ? bus.routeEtas[legIdx - 1] : 0;
-      const legDuration = bus.routeEtas[legIdx] - prevEta;
-      const legElapsed = elapsed - prevEta;
+    } else {
+      const ps = bus.plan[bus.legIndex];
+      const legDuration = ps.etaMin - bus.legStartedAt;
+      const legElapsed = s.time - bus.legStartedAt;
       const frac = legDuration > 0 ? Math.min(1, Math.max(0, legElapsed / legDuration)) : 1;
-
-      // Use decoded polyline points if available for this leg
-      if (bus.decodedLegs[legIdx] && bus.decodedLegs[legIdx].length > 1) {
-        bus.position = interpolateAlongPath(bus.decodedLegs[legIdx], frac);
-      } else {
-        // fallback straight-line lerp
-        const targetStopId = bus.route[legIdx];
-        const targetStop = s.stops[targetStopId];
-        if (targetStop) {
-          const from = legIdx === 0
-            ? bus.routeStartPosition
-            : (s.stops[bus.route[legIdx - 1]]?.position ?? bus.routeStartPosition);
-          bus.position = {
-            lat: from.lat + (targetStop.position.lat - from.lat) * frac,
-            lng: from.lng + (targetStop.position.lng - from.lng) * frac,
-          };
-        }
-      }
-
-      // record trail
+      bus.position = interpolateAlongPath(ps.legPath, frac);
       bus.positionHistory.push({ ...bus.position });
-      // cap history length to avoid memory bloat
-      if (bus.positionHistory.length > 200) {
-        bus.positionHistory = bus.positionHistory.slice(-200);
-      }
+    }
+
+    // cap history length to avoid memory bloat
+    if (bus.positionHistory.length > 200) {
+      bus.positionHistory = bus.positionHistory.slice(-200);
     }
   }
 
@@ -336,7 +297,7 @@ export async function simulateStep(
     }
   }
 
-  // 4. Assign routes to available buses
+  // 4. Assign routes to idle buses
   let openStops = Object.values(s.stops).filter((st) => st.status === "open");
   openStops.sort((a, b) => a.createdAt - b.createdAt);
 
@@ -350,7 +311,7 @@ export async function simulateStep(
   // for nothing.
   if (config.useGoogleRouting && config.googleApiKey) {
     const points = [
-      ...Object.values(s.buses).filter((b) => b.available).map((b) => b.position),
+      ...Object.values(s.buses).filter((b) => b.plan.length === 0).map((b) => b.position),
       ...openStops.map((st) => st.position),
       ...s.dropOffHubs,
     ];
@@ -360,40 +321,36 @@ export async function simulateStep(
   }
 
   for (const bus of Object.values(s.buses)) {
-    if (!bus.available || openStops.length === 0) continue;
+    if (bus.plan.length > 0 || openStops.length === 0) continue;
 
-    const { route, etas, polylines, decodedLegs } = await planRoute(bus, openStops, s.requests, config, travelTime, s.dropOffHubs, s.time);
-    if (route.length === 0) continue;
+    const plan = await planRoute(bus, openStops, s.requests, config, travelTime, s.dropOffHubs, s.time);
+    if (plan.length === 0) continue;
 
     bus.routeStartPosition = { ...bus.position };
-    bus.available = false;
-    bus.route = route.map((st) => st.id);
-    bus.routeEtas = etas;
-    bus.routePolylines = polylines;
-    bus.decodedLegs = decodedLegs;
-    bus.busyUntil = s.time + etas[etas.length - 1] + 5;
+    bus.plan = plan;
+    bus.legIndex = 0;
+    bus.legStartedAt = s.time;
 
-    for (const st of route) {
-      if (st.isDropOff) {
-        // Register drop-off stop in state
-        s.stops[st.id] = st;
-      } else {
-        s.stops[st.id].status = "assigned";
-        s.stops[st.id].assignedBus = bus.id;
-        for (const rid of st.riderIds) {
-          if (s.requests[rid] && s.requests[rid].status === "pending") {
-            s.requests[rid].status = "picked_up";
-            s.requests[rid].assignedBus = bus.id;
-            s.requests[rid].tAssigned = s.time;
-            // TODO(#4): tPickedUp should mean physical arrival, not assignment.
-            s.requests[rid].tPickedUp = s.time;
-            bus.onboard.push(rid);
-          }
+    for (const ps of plan) {
+      if (ps.kind !== "pickup" || ps.stopId == null) continue;
+      const stop = s.stops[ps.stopId];
+      if (stop) {
+        stop.status = "assigned";
+        stop.assignedBus = bus.id;
+      }
+      for (const rid of ps.boarding) {
+        const r = s.requests[rid];
+        if (r && r.status === "pending") {
+          r.assignedBus = bus.id;
+          r.tAssigned = s.time;
         }
       }
     }
 
-    log.push(`t=${s.time}: bus ${bus.id} assigned route [${bus.route.join(",")}]`);
+    const routeLabel = plan
+      .map((ps) => (ps.kind === "hub" ? `H${(ps.hubIndex ?? 0) + 1}` : ps.stopId))
+      .join(",");
+    log.push(`t=${s.time}: bus ${bus.id} assigned route [${routeLabel}]`);
     openStops = openStops.filter((st) => st.status === "open");
   }
 

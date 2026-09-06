@@ -111,9 +111,8 @@ function printTable(agg: BenchAggregate): void {
   console.log(line(meanRow));
 
   console.log(
-    "\nCaveats: wait = time-to-assignment, not physical pickup; detour ratio uses whole-route " +
-      "completion time (both change in Phase 4); vehicle-km undercounts past ~200 sim-minutes " +
-      "(positionHistory cap). See src/engine/bench.ts header."
+    "\nCaveats: vehicle-km undercounts past ~200 sim-minutes (positionHistory cap). " +
+      "See src/engine/bench.ts header."
   );
 }
 

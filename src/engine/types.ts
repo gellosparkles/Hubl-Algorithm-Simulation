@@ -5,19 +5,35 @@ export interface LatLng {
   lng: number;
 }
 
+/**
+ * One ordered stop on a bus's itinerary. Replaces the old parallel
+ * route/routeEtas/routePolylines/decodedLegs arrays plus the `available` flag
+ * and `busyUntil` back-derivation. Hub visits are entries here — never fake
+ * negative-id stops in the shared stop map (see issue #4).
+ */
+export interface PlanStop {
+  kind: "pickup" | "dropoff" | "hub";
+  position: LatLng;
+  stopId: number | null; // null for hub visits
+  hubIndex: number | null;
+  boarding: number[]; // rider ids getting on here
+  alighting: number[]; // rider ids getting off here
+  etaMin: number; // absolute sim minute the bus reaches this stop
+  loadAfter: number; // onboard count when the bus departs this stop
+  polyline: string; // encoded polyline for the leg arriving here (display only)
+  legPath: LatLng[]; // decoded path for the leg arriving here (display only)
+}
+
 export interface Bus {
   id: number;
   position: LatLng;
-  routeStartPosition: LatLng; // position when route was assigned
+  routeStartPosition: LatLng; // position when the current plan was assigned
   capacity: number;
   speed: number; // km/h
-  available: boolean;
-  route: number[]; // stop ids
-  routeEtas: number[]; // cumulative ETA per stop (minutes)
-  routePolylines: string[]; // encoded polylines per leg
-  decodedLegs: LatLng[][]; // decoded road points per leg
+  plan: PlanStop[]; // remaining itinerary; [] means idle
+  legIndex: number; // which leg of `plan` the bus is currently traversing
+  legStartedAt: number; // absolute sim minute the current leg began
   onboard: number[]; // rider ids
-  busyUntil: number; // sim minute when route completes
   positionHistory: LatLng[]; // trail of past positions
 }
 
@@ -44,7 +60,7 @@ export interface RiderRequest {
   walkDistanceKm: number | null;
   // ── lifecycle timestamps (sim minute; null until the transition happens) ──
   tAssigned: number | null;
-  tPickedUp: number | null; // TODO(#4): physical arrival; today set at assignment
+  tPickedUp: number | null; // sim minute the bus physically reached the rider's stop
   tDroppedOff: number | null;
   // ── promise fields feasibility work (#4, #5) depends on ──
   promisedPickupBy: number; // tRequest + maxWaitMinutes
@@ -59,9 +75,8 @@ export interface VirtualStop {
   riderIds: number[];
   createdAt: number;
   assignedBus: number | null;
-  status: "open" | "assigned" | "dropoff";
+  status: "open" | "assigned";
   dropOffHubIndex: number | null; // which drop-off hub riders go to
-  isDropOff?: boolean; // true if this "stop" is actually a drop-off destination
 }
 
 /**

@@ -137,6 +137,65 @@ describe("TravelTimeProvider wiring", () => {
   });
 });
 
+describe("bus itineraries (issue #4)", () => {
+  it("represents a route as one PlanStop[] with no parallel arrays or negative-id stops", async () => {
+    const s = await run({ seed: 12345 }, 40);
+
+    for (const bus of Object.values(s.buses)) {
+      expect(bus).not.toHaveProperty("route");
+      expect(bus).not.toHaveProperty("routeEtas");
+      expect(bus).not.toHaveProperty("available");
+      expect(bus).not.toHaveProperty("busyUntil");
+      expect(Array.isArray(bus.plan)).toBe(true);
+      for (const ps of bus.plan) {
+        expect(["pickup", "dropoff", "hub"]).toContain(ps.kind);
+        expect(ps.etaMin).toBeGreaterThan(0);
+        expect(ps.loadAfter).toBeGreaterThanOrEqual(0);
+        if (ps.kind === "hub") expect(ps.stopId).toBeNull();
+      }
+    }
+
+    // Hub visits never leak into the shared stop map.
+    for (const id of Object.keys(s.stops)) expect(Number(id)).toBeGreaterThan(0);
+    for (const st of Object.values(s.stops)) expect(st.status).not.toBe("dropoff");
+  });
+
+  it("marks a rider picked_up only once a bus has physically reached their stop", async () => {
+    const config: SimConfig = { ...DEFAULT_CONFIG, seed: 12345, simMinutes: 40 };
+    let s = createInitialState(config);
+    s.dropOffHubs = HUBS;
+    for (let i = 0; i < config.simMinutes; i++) {
+      s = await simulateStep(s, config);
+      for (const bus of Object.values(s.buses)) {
+        for (const rid of bus.onboard) {
+          // an onboard rider's board stop ETA is in the past
+          expect(s.requests[rid].tPickedUp).not.toBeNull();
+          expect(s.requests[rid].tPickedUp!).toBeLessThanOrEqual(s.time);
+        }
+      }
+    }
+
+    // Some rider is assigned (tAssigned set) but still waiting (pending) — the
+    // old engine flipped straight to picked_up at assignment.
+    const assignedButWaiting = Object.values(s.requests).filter(
+      (r) => r.tAssigned !== null && r.status === "pending"
+    );
+    expect(assignedButWaiting.length).toBeGreaterThan(0);
+  });
+
+  it("completes each rider at their own drop-off with a real in-vehicle time", async () => {
+    const s = await run({ seed: 777 }, 120);
+    const completed = Object.values(s.requests).filter((r) => r.status === "completed");
+    expect(completed.length).toBeGreaterThan(0);
+    for (const r of completed) {
+      expect(r.tPickedUp).not.toBeNull();
+      expect(r.tDroppedOff).not.toBeNull();
+      expect(r.tDroppedOff!).toBeGreaterThanOrEqual(r.tPickedUp!);
+      expect(r.tPickedUp!).toBeGreaterThanOrEqual(r.tRequest);
+    }
+  });
+});
+
 describe("simulation invariants", () => {
   it("advances one minute per step", async () => {
     const config: SimConfig = { ...DEFAULT_CONFIG, seed: 3 };

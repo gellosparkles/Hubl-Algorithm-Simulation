@@ -6,25 +6,10 @@ import {
   Polyline,
 } from "@react-google-maps/api";
 import { SimState, LatLng } from "@/engine/types";
+import { decodePolyline } from "@/services/routing";
 
 const MAP_CENTER = { lat: 34.05, lng: -118.35 };
 const MAP_STYLES = { width: "100%", height: "100%" };
-
-// decode Google encoded polyline
-function decodePolyline(encoded: string): google.maps.LatLngLiteral[] {
-  const points: google.maps.LatLngLiteral[] = [];
-  let index = 0, lat = 0, lng = 0;
-  while (index < encoded.length) {
-    let b, shift = 0, result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-    shift = 0; result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
-  }
-  return points;
-}
 
 interface Props {
   state: SimState;
@@ -55,23 +40,17 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
   }, [placingDropOff, onMapClick]);
 
   const busEntries = useMemo(() => Object.values(state.buses), [state.buses]);
-  const stopEntries = useMemo(() => Object.values(state.stops).filter(s => !s.isDropOff), [state.stops]);
+  const stopEntries = useMemo(() => Object.values(state.stops), [state.stops]);
 
-  // build polylines from decoded legs or encoded polylines
+  // build polylines from each bus's itinerary legs
   const routeLines = useMemo(() => {
     const lines: { path: google.maps.LatLngLiteral[]; busId: number }[] = [];
     for (const bus of busEntries) {
-      if (bus.decodedLegs && bus.decodedLegs.length > 0) {
-        for (const leg of bus.decodedLegs) {
-          if (leg.length > 1) {
-            lines.push({ path: leg, busId: bus.id });
-          }
-        }
-      } else if (bus.routePolylines && bus.routePolylines.length > 0) {
-        for (const enc of bus.routePolylines) {
-          if (enc) {
-            lines.push({ path: decodePolyline(enc), busId: bus.id });
-          }
+      for (const ps of bus.plan) {
+        if (ps.legPath.length > 1) {
+          lines.push({ path: ps.legPath, busId: bus.id });
+        } else if (ps.polyline) {
+          lines.push({ path: decodePolyline(ps.polyline), busId: bus.id });
         }
       }
     }
@@ -127,7 +106,7 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
         <Marker
           key={`bus-${bus.id}`}
           position={bus.position}
-          draggable={bus.available && !state.running && !!onBusDrag}
+          draggable={bus.plan.length === 0 && !state.running && !!onBusDrag}
           onDragEnd={(e) => {
             if (e.latLng && onBusDrag) {
               onBusDrag(bus.id, { lat: e.latLng.lat(), lng: e.latLng.lng() });
@@ -137,16 +116,16 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
           icon={{
             path: google.maps.SymbolPath.CIRCLE,
             scale: 10,
-            fillColor: bus.available ? "#1a8cff" : "#2db87a",
+            fillColor: bus.plan.length === 0 ? "#1a8cff" : "#2db87a",
             fillOpacity: 1,
             strokeColor: "#fff",
             strokeWeight: 2,
           }}
-          title={`Bus ${bus.id} – ${bus.available ? "Available" : `${bus.onboard.length} onboard`}${bus.available && !state.running ? " (drag to reposition)" : ""}`}
+          title={`Bus ${bus.id} – ${bus.plan.length === 0 ? "Available" : `${bus.onboard.length} onboard`}${bus.plan.length === 0 && !state.running ? " (drag to reposition)" : ""}`}
         />
       ))}
 
-      {/* Virtual stops (pickup only) */}
+      {/* Virtual stops */}
       {stopEntries.map((stop) => (
         <Marker
           key={`stop-${stop.id}`}

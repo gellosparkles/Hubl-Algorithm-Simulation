@@ -2,16 +2,13 @@
  * Headless benchmark harness — sweeps a config across seeds and reports
  * aggregate KPIs. See plan.md Phase 0.
  *
- * KPI caveats, all inherent to the *current* pre-rewrite engine and expected
- * to change meaning once later phases land (re-baseline after each):
- *  - "wait" is time from request to *assignment* (status pending -> picked_up),
- *    not physical boarding — the engine sets `picked_up` at route-assignment
- *    time, not arrival (see CLAUDE.md gotchas; Phase 4 fixes this).
- *  - "detour ratio" divides (completion time − assignment time) by the
- *    haversine direct-drive time. `completed` fires for a bus's entire
- *    onboard list when its whole route finishes, not per rider drop-off, so
- *    this systematically overstates ride time for pooled riders (Phase 4
- *    adds per-stop completion).
+ * KPI caveats:
+ *  - "wait" is time from request to physical boarding (the pending -> picked_up
+ *    transition, which issue #4 moved to the moment the bus reaches the stop).
+ *  - "detour ratio" divides (rider drop-off time − rider board time) by the
+ *    haversine direct-drive time. Since issue #4 each rider is completed at
+ *    their own drop-off, not in bulk at route end, so this is a real per-rider
+ *    in-vehicle ratio.
  *  - "vehicle-km" sums haversine distance between consecutive
  *    `bus.positionHistory` samples; the engine caps that array at 200
  *    entries per bus, so runs much longer than ~200 minutes will undercount.

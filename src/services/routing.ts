@@ -25,6 +25,26 @@ function deg2rad(d: number) {
   return (d * Math.PI) / 180;
 }
 
+/**
+ * Decode a Google "encoded polyline" string into coordinates. Single shared
+ * implementation — the simulator and the Google map both import this rather
+ * than keeping their own copy (issue #4).
+ */
+export function decodePolyline(encoded: string): LatLng[] {
+  const points: LatLng[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
 // Geometry-only fallback speed for getDirections() below when Google is
 // unavailable — display purposes only. The dispatcher's travel-time
 // estimates come from TravelTimeProvider (src/services/travelTime.ts), never
