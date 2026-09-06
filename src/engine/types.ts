@@ -27,7 +27,6 @@ export interface PlanStop {
 export interface Bus {
   id: number;
   position: LatLng;
-  routeStartPosition: LatLng; // position when the current plan was assigned
   capacity: number;
   speed: number; // km/h
   plan: PlanStop[]; // remaining itinerary; [] means idle

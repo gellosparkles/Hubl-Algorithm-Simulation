@@ -25,6 +25,31 @@ function gridPath(from: LatLng, to: LatLng): LatLng[] {
   return [{ ...from }, { lat: from.lat, lng: to.lng }, { ...to }];
 }
 
+/**
+ * Display geometry for one leg: a road-snapped path + encoded polyline when
+ * Google routing is on, an L-shaped grid path otherwise. Never affects timing —
+ * that always comes from the TravelTimeProvider.
+ */
+async function resolveLeg(
+  from: LatLng,
+  to: LatLng,
+  config: SimConfig
+): Promise<{ polyline: string; legPath: LatLng[] }> {
+  let polyline = "";
+  let legPath: LatLng[] = [];
+  if (config.useGoogleRouting && config.googleApiKey) {
+    try {
+      const dir = await getDirections(from, to, config.googleApiKey, true);
+      polyline = dir.polyline;
+      legPath = dir.decodedPath;
+    } catch {
+      // fall through to the grid path
+    }
+  }
+  if (legPath.length < 2) legPath = gridPath(from, to);
+  return { polyline, legPath };
+}
+
 export async function planRoute(
   bus: Bus,
   openStops: VirtualStop[],
@@ -69,19 +94,7 @@ export async function planRoute(
 
     if (plan.length > 0 && t + travelMin + pickupMin > config.timeBudgetMinutes) break;
 
-    // Get road-snapped path if Google routing enabled — geometry only, never timing.
-    let polyline = "";
-    let legPath: LatLng[] = [];
-    if (config.useGoogleRouting && config.googleApiKey) {
-      try {
-        const dir = await getDirections(cur, best.position, config.googleApiKey, true);
-        polyline = dir.polyline;
-        legPath = dir.decodedPath;
-      } catch {
-        // fallback: no polyline
-      }
-    }
-    if (legPath.length < 2) legPath = gridPath(cur, best.position);
+    const { polyline, legPath } = await resolveLeg(cur, best.position, config);
 
     t += travelMin + pickupMin;
 
@@ -124,16 +137,7 @@ export async function planRoute(
       const travelMin = travelTime.time(cur, hubPos, now + t);
       const unloadMin = 1;
 
-      let polyline = "";
-      let legPath: LatLng[] = [];
-      if (config.useGoogleRouting && config.googleApiKey) {
-        try {
-          const dir = await getDirections(cur, hubPos, config.googleApiKey, true);
-          polyline = dir.polyline;
-          legPath = dir.decodedPath;
-        } catch { /* fallback */ }
-      }
-      if (legPath.length < 2) legPath = gridPath(cur, hubPos);
+      const { polyline, legPath } = await resolveLeg(cur, hubPos, config);
 
       t += travelMin + unloadMin;
 

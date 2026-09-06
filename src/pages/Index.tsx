@@ -89,7 +89,7 @@ export default function Index() {
       ...s,
       buses: {
         ...s.buses,
-        [busId]: { ...s.buses[busId], position, routeStartPosition: position, positionHistory: [] },
+        [busId]: { ...s.buses[busId], position, positionHistory: [] },
       },
     }));
   }, []);

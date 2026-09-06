@@ -107,10 +107,12 @@ outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only i
 currently cluster — outbound needs board-at-hub routing, so ~124 of the ~232 `pending` are
 outbound riders parked until the Phase 3 dispatcher. Completions are ~0 over 60 min because the
 single-shot origin-clustering planner can't finish many hub deliveries in the horizon; they reach
-~10 by 120 min. The issue-#4 prefactor moved the lifecycle-dependent KPIs (`waitP50` jumped ~3→~20
-min because "wait" is now request→physical boarding, not request→assignment; `meanOccupancy` fell
-because riders board late) but left request generation and planning untouched. Throughput is the
-Phase 3 target. Record metrics before and after any planner/clustering change
+~10 by 120 min. The issue-#4 prefactor left request generation and greedy planning untouched, but moved the
+KPIs downstream of the lifecycle fix: `waitP50` jumped ~3→~20 min ("wait" is now
+request→physical boarding, not request→assignment), `meanOccupancy` fell (riders board late), and
+`totalStops` dropped ~12→~10 (hub visits are itinerary entries now, so negative-id stops no longer
+pollute `s.stops` — a meaning change, not a clustering regression). Throughput is the Phase 3
+target. Record metrics before and after any planner/clustering change
 rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
 since haversine and Google runs aren't comparable.
 

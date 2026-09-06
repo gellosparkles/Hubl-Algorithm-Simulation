@@ -136,7 +136,6 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     buses[i] = {
       id: i,
       position: pos,
-      routeStartPosition: pos,
       capacity: config.busCapacity,
       speed: config.busSpeed,
       plan: [],
@@ -213,7 +212,18 @@ export async function simulateStep(
     }
 
     if (bus.legIndex >= bus.plan.length) {
-      // itinerary complete — snap to the final stop and go idle
+      // itinerary complete — snap to the final stop and go idle. Any rider still
+      // aboard had no hub entry to alight at (e.g. a config with no drop-off
+      // hubs, where buses do pickups only) — drop them here rather than leave
+      // them stranded in `picked_up` on an idle bus.
+      for (const rid of bus.onboard) {
+        const r = s.requests[rid];
+        if (r && r.status === "picked_up") {
+          r.status = "completed";
+          r.tDroppedOff = s.time;
+        }
+      }
+      bus.onboard = [];
       bus.plan = [];
       bus.legIndex = 0;
       bus.positionHistory.push({ ...bus.position });
@@ -326,7 +336,6 @@ export async function simulateStep(
     const plan = await planRoute(bus, openStops, s.requests, config, travelTime, s.dropOffHubs, s.time);
     if (plan.length === 0) continue;
 
-    bus.routeStartPosition = { ...bus.position };
     bus.plan = plan;
     bus.legIndex = 0;
     bus.legStartedAt = s.time;
