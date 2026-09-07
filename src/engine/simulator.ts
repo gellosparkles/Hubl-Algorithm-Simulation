@@ -10,9 +10,10 @@ import {
   VirtualStop,
   SimConfig,
   SimState,
-  SimMetrics,
+  KpiAccumulators,
   DEFAULT_CONFIG,
 } from "./types";
+import { computeMetrics } from "./metrics";
 import { maintainStops, resetStopCounter } from "@/services/stops";
 import { planRoute } from "@/services/planner";
 import { createTravelTimeProvider } from "@/services/travelTime";
@@ -130,6 +131,15 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
 
   const rng = createRng(config.seed ?? randomSeed());
 
+  const kpi: KpiAccumulators = {
+    vehicleKm: 0,
+    deadheadKm: 0,
+    personMinutes: 0,
+    travelMinutes: 0,
+    pooledRiderIds: new Set<number>(),
+    assignments: 0,
+  };
+
   const buses: Record<number, Bus> = {};
   for (let i = 1; i <= config.numBuses; i++) {
     const pos = weightedRandomPoint(config, rng);
@@ -153,12 +163,36 @@ export function createInitialState(config: SimConfig = DEFAULT_CONFIG): SimState
     stops: {},
     dropOffHubs: [],
     eventLog: [],
-    metrics: { busAssignments: 0, completed: 0, pending: 0, pickedUp: 0, unserved: 0, totalRequests: 0, totalStops: 0 },
+    metrics: {
+      busAssignments: 0,
+      completed: 0,
+      pending: 0,
+      pickedUp: 0,
+      unserved: 0,
+      expired: 0,
+      totalRequests: 0,
+      totalStops: 0,
+      serviceRate: 0,
+      poolingRate: 0,
+      waitP50Min: null,
+      waitP90Min: null,
+      inVehicleP50Min: null,
+      inVehicleP90Min: null,
+      detourRatioMean: null,
+      vehicleKm: 0,
+      deadheadShare: 0,
+      meanOccupancy: 0,
+      meanWalkKm: null,
+    },
     running: false,
     rngState: rng.state,
+    kpi,
     travelTimeProviderDegraded: false,
   };
 }
+
+/** Ring-buffer bound on `SimState.eventLog` — keep the most recent N lines. */
+export const EVENT_LOG_LIMIT = 500;
 
 let nextReqId = 1;
 
@@ -185,6 +219,14 @@ export async function simulateStep(
   for (const bus of Object.values(s.buses)) {
     if (bus.plan.length === 0) continue;
 
+    // Per-tick KPI accounting: where the bus started, and whether it was empty
+    // going in. A tick's distance is booked as deadhead only when the bus is
+    // empty at both ends — a leg that began loaded isn't deadhead even if the
+    // last rider alights partway through (the sliver of empty km after that
+    // alighting is deliberately not split out at minute resolution).
+    const posBefore = { lat: bus.position.lat, lng: bus.position.lng };
+    const emptyAtStart = bus.onboard.length === 0;
+
     // Process every itinerary entry whose ETA has now elapsed. Riders board
     // when the bus physically reaches their stop and alight at their own
     // drop-off — not in bulk at route end (issue #4).
@@ -209,6 +251,11 @@ export async function simulateStep(
       }
       bus.legStartedAt = ps.etaMin;
       bus.legIndex += 1;
+    }
+
+    // Pooling: anyone sharing the cabin with ≥1 other rider this tick.
+    if (bus.onboard.length >= 2) {
+      for (const rid of bus.onboard) s.kpi.pooledRiderIds.add(rid);
     }
 
     if (bus.legIndex >= bus.plan.length) {
@@ -240,6 +287,14 @@ export async function simulateStep(
     if (bus.positionHistory.length > 200) {
       bus.positionHistory = bus.positionHistory.slice(-200);
     }
+
+    // Distance driven this tick — accumulated here so it survives the 200-entry
+    // positionHistory cap, unlike a post-hoc sum over that array.
+    const moved = haversine(posBefore, bus.position);
+    s.kpi.vehicleKm += moved;
+    if (emptyAtStart && bus.onboard.length === 0) s.kpi.deadheadKm += moved;
+    s.kpi.personMinutes += bus.onboard.length;
+    s.kpi.travelMinutes += 1;
   }
 
   // 2. Generate new rider requests
@@ -318,6 +373,7 @@ export async function simulateStep(
     bus.plan = plan;
     bus.legIndex = 0;
     bus.legStartedAt = s.time;
+    s.kpi.assignments += 1;
 
     for (const ps of plan) {
       if (ps.kind !== "pickup" || ps.stopId == null) continue;
@@ -344,17 +400,12 @@ export async function simulateStep(
 
   if (travelTime.degraded) s.travelTimeProviderDegraded = true;
 
-  // 5. Update metrics
-  const reqs = Object.values(s.requests);
-  s.metrics = {
-    busAssignments: log.filter((l) => l.includes("assigned route")).length,
-    completed: reqs.filter((r) => r.status === "completed").length,
-    pending: reqs.filter((r) => r.status === "pending").length,
-    pickedUp: reqs.filter((r) => r.status === "picked_up").length,
-    unserved: reqs.filter((r) => r.status === "unserved").length,
-    totalRequests: reqs.length,
-    totalStops: Object.keys(s.stops).length,
-  };
+  // Bound the event log to a ring buffer — it is rescanned nowhere now that
+  // busAssignments is a counter, but it still grows once per tick.
+  if (log.length > EVENT_LOG_LIMIT) log.splice(0, log.length - EVENT_LOG_LIMIT);
+
+  // 5. Recompute the KPI set from rider timestamps + the per-tick accumulators.
+  s.metrics = computeMetrics(s);
 
   s.rngState = rng.state;
   s.time += 1;

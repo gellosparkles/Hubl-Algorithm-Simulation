@@ -62,18 +62,22 @@ function fmt(n: number | null, digits = 1): string {
 }
 
 function printTable(agg: BenchAggregate): void {
-  const headers = ["seed", "reqs", "done", "pend", "unsv", "svc%", "waitP50", "waitP90", "detour", "vehKm", "occ", "stops", "asgn"];
+  const headers = ["seed", "reqs", "done", "pend", "unsv", "exp", "svc%", "waitP50", "waitP90", "ivP90", "detour", "pool%", "vehKm", "dhd%", "occ", "stops", "asgn"];
   const rows = agg.perSeed.map((k) => [
     String(k.seed),
     String(k.totalRequests),
     String(k.completed),
     String(k.pending),
     String(k.unserved),
+    String(k.expired),
     fmt(k.serviceRate * 100, 1),
     fmt(k.waitP50Min),
     fmt(k.waitP90Min),
+    fmt(k.inVehicleP90Min),
     fmt(k.detourRatioMean, 2),
+    fmt(k.poolingRate * 100, 1),
     fmt(k.vehicleKm),
+    fmt(k.deadheadShare * 100, 1),
     fmt(k.meanOccupancy, 2),
     String(k.totalStops),
     String(k.busAssignments),
@@ -86,11 +90,15 @@ function printTable(agg: BenchAggregate): void {
     fmt(m.completed, 0),
     fmt(m.pending, 0),
     fmt(m.unserved, 0),
+    fmt(m.expired, 0),
     fmt(m.serviceRate * 100, 1),
     fmt(m.waitP50Min),
     fmt(m.waitP90Min),
+    fmt(m.inVehicleP90Min),
     fmt(m.detourRatioMean, 2),
+    fmt(m.poolingRate * 100, 1),
     fmt(m.vehicleKm),
+    fmt(m.deadheadShare * 100, 1),
     fmt(m.meanOccupancy, 2),
     fmt(m.totalStops, 0),
     fmt(m.busAssignments, 0),
@@ -109,11 +117,6 @@ function printTable(agg: BenchAggregate): void {
   for (const row of rows) console.log(line(row));
   console.log(line(headers.map((h) => "-".repeat(h.length))));
   console.log(line(meanRow));
-
-  console.log(
-    "\nCaveats: vehicle-km undercounts past ~200 sim-minutes (positionHistory cap). " +
-      "See src/engine/bench.ts header."
-  );
 }
 
 async function main(): Promise<void> {

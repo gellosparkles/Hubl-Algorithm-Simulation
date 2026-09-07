@@ -117,6 +117,13 @@ target. Record metrics before and after any planner/stops change
 rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
 since haversine and Google runs aren't comparable.
 
+Since issue #6 the engine computes the full KPI set (`src/engine/metrics.ts`, `computeMetrics`)
+from rider timestamps and per-tick vehicle accounting (`SimState.kpi`): service/pooling rates,
+wait & in-vehicle P50/P90, detour ratio, vehicle-km, deadhead share, time-weighted occupancy,
+`expired` (pending past `promisedPickupBy`) vs `unserved`, and mean walk. `bench.ts` reads
+`SimState.metrics` directly — no status-polling shims. `busAssignments` is a plain counter
+(`kpi.assignments`) and `eventLog` is a ring buffer capped at `EVENT_LOG_LIMIT` (500).
+
 ### Test layout
 
 `vitest.config.ts` defines two projects:
@@ -152,9 +159,9 @@ only the build and test scaffolding is tied to the platform.
   are still module globals, but `createInitialState()` now resets **both**, so IDs no longer leak
   between runs. They remain shared across concurrent simulations in one process — IDs will
   interleave if you run two sims at once, though `rngState` keeps the *simulations* independent.
-- **`metrics.busAssignments` is derived by string-matching the event log**
-  (`log.filter(l => l.includes("assigned route"))`). The log grows unboundedly and is rescanned
-  every tick, so this is O(n²) over a long run and silently breaks if the log wording changes.
+- **`metrics.busAssignments` is a plain counter** (`SimState.kpi.assignments`, incremented in
+  `simulateStep` step 4) since issue #6 — no longer string-matched out of the event log. The
+  event log is now a ring buffer capped at `EVENT_LOG_LIMIT` (500) and nothing rescans it.
 - **`tsconfig` is loose**: `strictNullChecks: false`, `noImplicitAny: false`. A clean `tsc` does
   not imply null-safety.
 - **`useGoogleRouting` is opt-in and degrades silently.** Without an API key, `planRoute` uses

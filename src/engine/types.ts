@@ -120,15 +120,63 @@ export interface SimConfig {
   seed: number | null;
 }
 
+/**
+ * KPI set computed from rider lifecycle timestamps and per-tick vehicle
+ * accounting (see src/engine/metrics.ts). Everything here is derived inside the
+ * engine — a caller never re-derives a metric by polling rider status.
+ */
 export interface SimMetrics {
+  /** Plain incrementing counter — never string-matched out of the event log. */
   busAssignments: number;
   completed: number;
   pending: number;
   pickedUp: number;
   /** Requests classified `unserved` at request time — reported distinctly from riders still waiting. */
   unserved: number;
+  /** Pending riders never matched to a bus and already past their promised pickup time. Distinct from `unserved`. */
+  expired: number;
   totalRequests: number;
   totalStops: number;
+  /** completed / totalRequests */
+  serviceRate: number;
+  /** share of ever-boarded riders who were aboard a bus alongside ≥1 other rider */
+  poolingRate: number;
+  /** request → physical boarding (`tPickedUp − tRequest`), minutes */
+  waitP50Min: number | null;
+  waitP90Min: number | null;
+  /** boarding → alighting (`tDroppedOff − tPickedUp`), minutes */
+  inVehicleP50Min: number | null;
+  inVehicleP90Min: number | null;
+  /** mean of `(tDroppedOff − tPickedUp) / directTimeMin` over completed riders */
+  detourRatioMean: number | null;
+  /** total km driven, accumulated per tick (survives the positionHistory cap) */
+  vehicleKm: number;
+  /** share of vehicleKm driven with an empty bus */
+  deadheadShare: number;
+  /** mean onboard riders, weighted by travel time */
+  meanOccupancy: number;
+  /** mean `walkDistanceKm` over riders assigned a stop */
+  meanWalkKm: number | null;
+}
+
+/**
+ * Running totals the per-tick loop accumulates so time-weighted and
+ * path-integrated KPIs survive `structuredClone` and the positionHistory cap.
+ * Reset by `createInitialState`; read by `computeMetrics`.
+ */
+export interface KpiAccumulators {
+  vehicleKm: number;
+  /** Subset of vehicleKm driven on ticks the bus was empty start-to-end. */
+  deadheadKm: number;
+  /** Σ onboard riders over every traveling bus-minute (mean-occupancy numerator). */
+  personMinutes: number;
+  /** Count of traveling bus-minutes (mean-occupancy denominator). */
+  travelMinutes: number;
+  /** Rider ids that were aboard a bus at the same time as ≥1 other rider. A Set,
+   *  so membership stays O(1) over a long run; it survives `structuredClone`. */
+  pooledRiderIds: Set<number>;
+  /** Route assignments so far — the source of `SimMetrics.busAssignments`. */
+  assignments: number;
 }
 
 export interface SimState {
@@ -141,6 +189,7 @@ export interface SimState {
   metrics: SimMetrics;
   running: boolean;
   rngState: number; // mulberry32 state — advances every step, clones cleanly
+  kpi: KpiAccumulators; // running totals for time-weighted / path-integrated KPIs
   /**
    * Sticky across the run: true once any tick's TravelTimeProvider fell back
    * (e.g. Google → haversine). A fresh provider is created every tick (see

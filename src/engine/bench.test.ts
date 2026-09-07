@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { median, percentile, runBenchSeed, runBenchSweep } from "./bench";
+import { median, percentile } from "./metrics";
+import { runBenchSeed, runBenchSweep } from "./bench";
 
 describe("percentile helpers", () => {
   it("computes median and p90 with linear interpolation", () => {
