@@ -25,6 +25,10 @@ const NUMERIC_CONFIG_KEYS: (keyof Pick<
   | "hubCatchmentKm"
   | "rideTimeFactor"
   | "rideTimeSlackMin"
+  | "dwellPickupMin"
+  | "dwellPickupPerRiderMin"
+  | "dwellDropoffMin"
+  | "batchWindowMinutes"
 >)[] = [
   "numBuses",
   "avgRequestsPerMin",
@@ -38,6 +42,10 @@ const NUMERIC_CONFIG_KEYS: (keyof Pick<
   "hubCatchmentKm",
   "rideTimeFactor",
   "rideTimeSlackMin",
+  "dwellPickupMin",
+  "dwellPickupPerRiderMin",
+  "dwellDropoffMin",
+  "batchWindowMinutes",
 ];
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -133,6 +141,9 @@ async function main(): Promise<void> {
   }
   if (args.useGoogleRouting !== undefined) {
     overrides.useGoogleRouting = args.useGoogleRouting === "true";
+  }
+  if (args.rebalanceEnabled !== undefined) {
+    overrides.rebalanceEnabled = args.rebalanceEnabled === "true";
   }
 
   const result = await runBenchSweep(overrides, seeds, minutes);

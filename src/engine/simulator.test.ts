@@ -118,8 +118,10 @@ describe("TravelTimeProvider wiring", () => {
     s.dropOffHubs = HUBS;
     for (let i = 0; i < config.simMinutes; i++) s = await simulateStep(s, config);
 
-    // One matrix() attempt per tick that had points to warm, never one per leg.
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(config.simMinutes);
+    // One matrix() call per tick that had points to warm, never one per leg.
+    // The matrix() call may fan out into a small number of element-capped
+    // chunks, so allow a couple of fetches per tick — still O(ticks), not O(legs).
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(config.simMinutes * 2);
     // The client always failed, so every tick's dispatch fell back — and that
     // must survive in final state even though the provider itself is
     // recreated (and discarded) fresh every tick.

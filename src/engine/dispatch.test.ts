@@ -1,0 +1,250 @@
+import { describe, it, expect } from "vitest";
+import {
+  bestInsertion,
+  simulateItinerary,
+  InsertionDispatcher,
+  LiteStop,
+  RiderMeta,
+  Shipment,
+  Vehicle,
+} from "./dispatch";
+import { objectiveCost, DEFAULT_OBJECTIVE, ZERO_PARTS } from "./objective";
+import { DEFAULT_CONFIG, LatLng, SimConfig } from "./types";
+import { HaversineProvider } from "@/services/travelTime";
+
+const provider = new HaversineProvider(DEFAULT_CONFIG.detourFactor, DEFAULT_CONFIG.speedProfile);
+const config: SimConfig = { ...DEFAULT_CONFIG };
+
+function meta(partial: Partial<RiderMeta> = {}): RiderMeta {
+  return {
+    tRequest: 0,
+    directTimeMin: 5,
+    maxRideTimeMin: 60,
+    promisedPickupBy: 100,
+    walkKm: 0,
+    boardedAt: null,
+    ...partial,
+  };
+}
+
+/** A point `km` east / `north` km of `origin` (rough equirectangular, fine at city scale). */
+function offset(origin: LatLng, east: number, north: number): LatLng {
+  return {
+    lat: origin.lat + north / 110.574,
+    lng: origin.lng + east / (111.32 * Math.cos((origin.lat * Math.PI) / 180)),
+  };
+}
+
+describe("objectiveCost", () => {
+  it("is a weighted sum — every weight is a live knob", () => {
+    const parts = { km: 1, hours: 1, waitMin: 1, excessRideMin: 1, walkKm: 1, unserved: 1 };
+    const w = DEFAULT_OBJECTIVE;
+    expect(objectiveCost(parts, w)).toBeCloseTo(
+      w.costPerKm + w.costPerHour + w.waitWeight + w.rideWeight + w.walkWeight + w.unservedPenalty
+    );
+    // bump one weight, cost moves by exactly that delta
+    expect(objectiveCost(parts, { ...w, waitWeight: w.waitWeight + 10 })).toBeCloseTo(
+      objectiveCost(parts, w) + 10
+    );
+  });
+
+  it("scores an empty route at zero", () => {
+    expect(objectiveCost(ZERO_PARTS, DEFAULT_OBJECTIVE)).toBe(0);
+  });
+});
+
+describe("simulateItinerary feasibility", () => {
+  const hub: LatLng = { lat: 34.05, lng: -118.24 };
+  const bus: LatLng = { lat: 34.05, lng: -118.20 };
+
+  it("rejects a plan that exceeds capacity at any point, including after a mid-route alighting", () => {
+    // load profile: +3, +3 (=6), −3 (=3), +3 (=6) — never over a cap of 6, fine
+    const riders = new Map<number, RiderMeta>();
+    for (let i = 1; i <= 12; i++) riders.set(i, meta());
+    const p = (n: number, boarding: number[], alighting: number[]): LiteStop => ({
+      kind: alighting.length ? "hub" : "pickup",
+      position: offset(bus, n * 0.2, 0),
+      stopId: alighting.length ? null : n,
+      hubIndex: 0,
+      boarding,
+      alighting,
+    });
+    const okPlan = [p(1, [1, 2, 3], []), p(2, [4, 5, 6], []), p(3, [], [1, 2, 3]), p(4, [7, 8, 9], [])];
+    expect(simulateItinerary(bus, [], okPlan, riders, config, 0, provider, 6).feasible).toBe(true);
+
+    // same but the last pickup pushes load to 9 with the alighting removed — over cap 6
+    const badPlan = [p(1, [1, 2, 3], []), p(2, [4, 5, 6], []), p(4, [7, 8, 9], [])];
+    const sim = simulateItinerary(bus, [], badPlan, riders, config, 0, provider, 6);
+    expect(sim.feasible).toBe(false);
+    expect(sim.reason).toBe("capacity");
+  });
+
+  it("rejects a plan that boards a rider after their promised-pickup deadline", () => {
+    const riders = new Map([[1, meta({ promisedPickupBy: 2 })]]);
+    const plan: LiteStop[] = [
+      { kind: "pickup", position: offset(bus, 5, 0), stopId: 1, hubIndex: 0, boarding: [1], alighting: [] },
+      { kind: "hub", position: hub, stopId: null, hubIndex: 0, boarding: [], alighting: [1] },
+    ];
+    const sim = simulateItinerary(bus, [], plan, riders, config, 0, provider, 12);
+    expect(sim.feasible).toBe(false);
+    expect(sim.reason).toBe("pickup-window");
+  });
+
+  it("rejects a plan that pushes an onboard rider past their max ride time", () => {
+    const riders = new Map([[1, meta({ maxRideTimeMin: 3, boardedAt: 0 })]]);
+    const plan: LiteStop[] = [
+      { kind: "pickup", position: offset(bus, 8, 0), stopId: 2, hubIndex: 0, boarding: [2], alighting: [] },
+      { kind: "hub", position: offset(bus, 16, 0), stopId: null, hubIndex: 0, boarding: [], alighting: [1, 2] },
+    ];
+    riders.set(2, meta());
+    const sim = simulateItinerary(bus, [1], plan, riders, config, 0, provider, 12);
+    expect(sim.feasible).toBe(false);
+    expect(sim.reason).toBe("max-ride");
+  });
+
+  it("counts the first leg and the drop-off legs against the time budget", () => {
+    const tight: SimConfig = { ...config, timeBudgetMinutes: 5 };
+    const riders = new Map([[1, meta()]]);
+    const plan: LiteStop[] = [
+      { kind: "pickup", position: offset(bus, 6, 0), stopId: 1, hubIndex: 0, boarding: [1], alighting: [] },
+      { kind: "hub", position: offset(bus, 12, 0), stopId: null, hubIndex: 0, boarding: [], alighting: [1] },
+    ];
+    const sim = simulateItinerary(bus, [], plan, riders, tight, 0, provider, 12);
+    expect(sim.feasible).toBe(false);
+    expect(sim.reason).toBe("time-budget");
+  });
+});
+
+describe("bestInsertion — marginal detour prefers the corridor", () => {
+  // budget widened so this test isolates the corridor property, not the time cap
+  const wide: SimConfig = { ...config, timeBudgetMinutes: 120 };
+  const A: LatLng = { lat: 34.02, lng: -118.30 };
+  const H = offset(A, 10, 0); // hub 10 km due east of the bus
+  const idleBus: Vehicle = { id: 1, loadLimit: 12, position: A, onboard: [], plan: [] };
+
+  function inboundShipment(id: number, stopPos: LatLng): Shipment {
+    return {
+      id,
+      direction: "inbound",
+      hubIndex: 0,
+      pickup: { location: stopPos },
+      delivery: { location: H },
+      load: 1,
+      riderIds: [id],
+      pickupTimeWindowEnd: 100,
+      maxRideTimeMin: 120,
+    };
+  }
+
+  it("a farther stop on the A→H line beats a nearer stop perpendicular to it", () => {
+    const onCorridor = offset(A, 5, 0); // 5 km along, 0 off — dead on the line
+    const perpendicular = offset(A, 4.8, 3); // slightly nearer along, but 3 km off-axis
+    const riders = new Map<number, RiderMeta>([
+      [10, meta({ tRequest: 0, promisedPickupBy: 100, directTimeMin: 12 })],
+      [20, meta({ tRequest: 0, promisedPickupBy: 100, directTimeMin: 12 })],
+    ]);
+
+    const corridorCost = bestInsertion(idleBus, inboundShipment(10, onCorridor), riders, wide, 0, provider);
+    const perpCost = bestInsertion(idleBus, inboundShipment(20, perpendicular), riders, wide, 0, provider);
+
+    expect(corridorCost).not.toBeNull();
+    expect(perpCost).not.toBeNull();
+    expect(corridorCost!.cost).toBeLessThan(perpCost!.cost);
+  });
+});
+
+describe("bestInsertion — inbound and outbound share one code path", () => {
+  const hub: LatLng = { lat: 34.05, lng: -118.24 };
+
+  it("seeds [pickup, hub] for inbound and [hub, dropoff] for outbound", () => {
+    const riders = new Map([[1, meta()]]);
+    const inbound = bestInsertion(
+      { id: 1, loadLimit: 12, position: offset(hub, 3, 0), onboard: [], plan: [] },
+      {
+        id: 1, direction: "inbound", hubIndex: 0,
+        pickup: { location: offset(hub, 3, 0) }, delivery: { location: hub },
+        load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
+      },
+      riders, config, 0, provider
+    );
+    expect(inbound!.lite.map((s) => s.kind)).toEqual(["pickup", "hub"]);
+
+    const outbound = bestInsertion(
+      { id: 2, loadLimit: 12, position: hub, onboard: [], plan: [] },
+      {
+        id: 2, direction: "outbound", hubIndex: 0,
+        pickup: { location: hub }, delivery: { location: offset(hub, 3, 0) },
+        load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
+      },
+      riders, config, 0, provider
+    );
+    expect(outbound!.lite.map((s) => s.kind)).toEqual(["hub", "dropoff"]);
+    expect(outbound!.lite[0].boarding).toEqual([1]);
+  });
+});
+
+describe("InsertionDispatcher", () => {
+  const hub: LatLng = { lat: 34.05, lng: -118.24 };
+
+  it("assigns a stop to a moving bus that has spare capacity, not only idle buses", async () => {
+    // bus 1 is idle far away; bus 2 already has a plan but passes right by the new stop
+    const near = offset(hub, 2, 0);
+    const riders = new Map<number, RiderMeta>([
+      [1, meta({ boardedAt: 0 })], // aboard bus 2
+      [2, meta()], // waiting at the new stop
+    ]);
+    const busyBus: Vehicle = {
+      id: 2,
+      loadLimit: 12,
+      position: offset(hub, 3, 0),
+      onboard: [1],
+      plan: [
+        { kind: "pickup", position: offset(hub, 2.2, 0.1), stopId: 5, hubIndex: 0, boarding: [], alighting: [] },
+        { kind: "hub", position: hub, stopId: null, hubIndex: 0, boarding: [], alighting: [1] },
+      ],
+    };
+    const idleFar: Vehicle = { id: 1, loadLimit: 12, position: offset(hub, 40, 40), onboard: [], plan: [] };
+    const shipment: Shipment = {
+      id: 9, direction: "inbound", hubIndex: 0,
+      pickup: { location: near }, delivery: { location: hub },
+      load: 1, riderIds: [2], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
+    };
+
+    const result = await new InsertionDispatcher().dispatch(
+      { shipments: [shipment], vehicles: [idleFar, busyBus], riders, now: 0 },
+      config,
+      provider
+    );
+    expect(result.assignments).toHaveLength(1);
+    expect(result.assignments[0].vehicleId).toBe(2);
+    expect(result.assignments[0].stopIds).toEqual([9]);
+  });
+
+  it("commits the higher-regret stop first", async () => {
+    // two shipments, two buses. shipment A is only feasible for bus 1 (infinite regret);
+    // shipment B is feasible for both. A must be committed to bus 1.
+    const riders = new Map<number, RiderMeta>([
+      [1, meta()],
+      [2, meta()],
+    ]);
+    const b1: Vehicle = { id: 1, loadLimit: 1, position: offset(hub, 1, 0), onboard: [], plan: [] };
+    const b2: Vehicle = { id: 2, loadLimit: 12, position: offset(hub, 1.5, 0), onboard: [], plan: [] };
+    const shipA: Shipment = {
+      id: 1, direction: "inbound", hubIndex: 0,
+      pickup: { location: offset(hub, 1, 0) }, delivery: { location: hub },
+      load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
+    };
+    const shipB: Shipment = {
+      id: 2, direction: "inbound", hubIndex: 0,
+      pickup: { location: offset(hub, 1.5, 0) }, delivery: { location: hub },
+      load: 1, riderIds: [2], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
+    };
+    const result = await new InsertionDispatcher().dispatch(
+      { shipments: [shipA, shipB], vehicles: [b1, b2], riders, now: 0 },
+      config,
+      provider
+    );
+    const a = result.assignments.find((x) => x.stopIds.includes(1));
+    expect(a?.vehicleId).toBe(1);
+  });
+});

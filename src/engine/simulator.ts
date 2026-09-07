@@ -6,6 +6,7 @@
 import {
   Bus,
   LatLng,
+  PlanStop,
   RiderRequest,
   VirtualStop,
   SimConfig,
@@ -15,8 +16,16 @@ import {
 } from "./types";
 import { computeMetrics } from "./metrics";
 import { maintainStops, resetStopCounter } from "@/services/stops";
-import { planRoute } from "@/services/planner";
-import { createTravelTimeProvider } from "@/services/travelTime";
+import {
+  Dispatcher,
+  InsertionDispatcher,
+  LiteStop,
+  RiderMeta,
+  Shipment,
+  Vehicle,
+} from "./dispatch";
+import { materializeItinerary } from "@/services/itinerary";
+import { createTravelTimeProvider, speedAt } from "@/services/travelTime";
 import { haversine } from "@/services/routing";
 import { classifyRequest } from "./tripModel";
 import { Rng, createRng, randomSeed } from "./rng";
@@ -200,6 +209,37 @@ export function resetReqCounter() {
   nextReqId = 1;
 }
 
+/** Stateless — one shared instance is fine across concurrent simulations. */
+const dispatcher: Dispatcher = new InsertionDispatcher();
+
+/** `PlanStop` → `LiteStop` (drop derived ETA / load / display fields). */
+function toLite(ps: PlanStop): LiteStop {
+  return {
+    kind: ps.kind,
+    position: { ...ps.position },
+    stopId: ps.stopId,
+    hubIndex: ps.hubIndex,
+    boarding: [...ps.boarding],
+    alighting: [...ps.alighting],
+  };
+}
+
+/**
+ * A stop's riders still worth dispatching: pending and not yet past their
+ * promised pickup. A rider past it is a lost cause (surfaces as `expired`) and
+ * must not keep the whole persistent stop infeasible forever.
+ */
+function liveStopRiders(
+  stop: VirtualStop,
+  requests: Record<number, RiderRequest>,
+  now: number
+): number[] {
+  return stop.riderIds.filter((rid) => {
+    const r = requests[rid];
+    return r != null && r.status === "pending" && r.promisedPickupBy >= now;
+  });
+}
+
 export async function simulateStep(
   state: SimState,
   config: SimConfig
@@ -336,66 +376,161 @@ export async function simulateStep(
     if (s.requests[rid]) Object.assign(s.requests[rid], updates);
   }
 
-  // 4. Assign routes to idle buses. Only inbound stops are dispatchable here:
-  //    the greedy planner boards riders at the stop, which is wrong for outbound
-  //    (they board at the hub). Outbound stops still persist in s.stops for the
-  //    Phase 3 direction-aware dispatcher (issue #7).
-  let openStops = Object.values(s.stops).filter(
-    (st) => st.status === "open" && st.direction === "inbound"
-  );
-  openStops.sort((a, b) => a.createdAt - b.createdAt);
+  // 4. Dispatch — marginal-detour insertion into live itineraries (issue #7).
+  //    Both inbound and outbound open stops are dispatchable now: they share one
+  //    parameterised code path (insertion window before the trailing hub for
+  //    inbound, after the leading hub for outbound). Every bus with spare
+  //    capacity is a candidate, not only idle ones.
+  const runDispatch = config.batchWindowMinutes <= 1 || s.time % config.batchWindowMinutes === 0;
+  if (runDispatch) {
+    const stopRiders = new Map<number, number[]>();
+    const shipments: Shipment[] = [];
+    for (const st of Object.values(s.stops)) {
+      if (st.status !== "open" || st.dropOffHubIndex == null) continue;
+      if (st.direction !== "inbound" && st.direction !== "outbound") continue;
+      const hub = s.dropOffHubs[st.dropOffHubIndex];
+      if (!hub) continue;
+      const rids = liveStopRiders(st, s.requests, s.time);
+      if (rids.length === 0) continue;
+      stopRiders.set(st.id, rids);
+      shipments.push({
+        id: st.id,
+        direction: st.direction,
+        hubIndex: st.dropOffHubIndex,
+        pickup: { location: st.direction === "inbound" ? st.position : hub },
+        delivery: { location: st.direction === "inbound" ? hub : st.position },
+        load: rids.length,
+        riderIds: rids,
+        pickupTimeWindowEnd: Math.min(...rids.map((rid) => s.requests[rid].promisedPickupBy)),
+        maxRideTimeMin: Math.min(...rids.map((rid) => s.requests[rid].maxRideTimeMin)),
+      });
+    }
+    shipments.sort((a, b) => a.id - b.id);
 
-  // planRoute below calls travelTime.time() synchronously, per leg, as its
-  // greedy search discovers each next stop — that can never itself be the
-  // batched call a network-backed provider needs (see TravelTimeProvider's
-  // interface docstring). So warm the batch cache once per tick, up front,
-  // over every point this tick's planning might touch: bus positions, open
-  // stops, and drop-off hubs. Skipped for the haversine provider, which has
-  // no network round-trip to batch and would just pay an O(n^2) cost here
-  // for nothing.
-  if (config.useGoogleRouting && config.googleApiKey) {
-    const points = [
-      ...Object.values(s.buses).filter((b) => b.plan.length === 0).map((b) => b.position),
-      ...openStops.map((st) => st.position),
-      ...s.dropOffHubs,
-    ];
-    if (points.length > 0) {
-      await travelTime.matrix(points, points, s.time);
+    if (shipments.length > 0) {
+      const riderMeta = new Map<number, RiderMeta>();
+      const addMeta = (rid: number, boardedAt: number | null) => {
+        const r = s.requests[rid];
+        if (!r || riderMeta.has(rid)) return;
+        riderMeta.set(rid, {
+          tRequest: r.tRequest,
+          directTimeMin: r.directTimeMin,
+          maxRideTimeMin: r.maxRideTimeMin,
+          promisedPickupBy: r.promisedPickupBy,
+          walkKm: r.walkDistanceKm ?? 0,
+          boardedAt,
+        });
+      };
+      for (const rids of stopRiders.values()) for (const rid of rids) addMeta(rid, null);
+
+      const vehicles: Vehicle[] = Object.values(s.buses).map((bus) => {
+        for (const rid of bus.onboard) addMeta(rid, s.requests[rid]?.tPickedUp ?? s.time);
+        const remaining = bus.plan.slice(bus.legIndex).map(toLite);
+        for (const ls of remaining) for (const rid of ls.boarding) addMeta(rid, null);
+        return {
+          id: bus.id,
+          loadLimit: bus.capacity,
+          position: { ...bus.position },
+          onboard: [...bus.onboard],
+          plan: remaining,
+        };
+      });
+
+      // Warm the batch cache once, up front — the dispatcher reads
+      // travelTime.time() synchronously per leg, which can never be the batched
+      // call a network-backed provider needs. Skipped for haversine.
+      if (config.useGoogleRouting && config.googleApiKey) {
+        const byKey = new Map<string, LatLng>();
+        for (const p of [
+          ...vehicles.map((v) => v.position),
+          ...shipments.flatMap((sh) => [sh.pickup.location, sh.delivery.location]),
+        ]) {
+          byKey.set(`${p.lat.toFixed(4)},${p.lng.toFixed(4)}`, p);
+        }
+        const points = [...byKey.values()];
+        if (points.length > 0) await travelTime.matrix(points, points, s.time);
+      }
+
+      const result = await dispatcher.dispatch(
+        { shipments, vehicles, riders: riderMeta, now: s.time },
+        config,
+        travelTime
+      );
+
+      for (const asg of result.assignments) {
+        const bus = s.buses[asg.vehicleId];
+        if (!bus) continue;
+
+        const mat = await materializeItinerary(bus, asg.lite, riderMeta, config, s.time, travelTime);
+        bus.plan = mat.plan;
+        bus.legIndex = 0;
+        bus.legStartedAt = s.time;
+        s.kpi.assignments += 1;
+
+        for (const sid of asg.stopIds) {
+          const stop = s.stops[sid];
+          if (stop) {
+            stop.status = "assigned";
+            stop.assignedBus = bus.id;
+          }
+          for (const rid of stopRiders.get(sid) ?? []) {
+            const r = s.requests[rid];
+            if (r && r.status === "pending") {
+              r.assignedBus = bus.id;
+              r.tAssigned = s.time;
+            }
+          }
+        }
+
+        const routeLabel = mat.plan
+          .map((ps) => (ps.kind === "hub" ? `H${(ps.hubIndex ?? 0) + 1}` : ps.stopId))
+          .join(",");
+        log.push(`t=${s.time}: bus ${bus.id} plan [${routeLabel}] (+${asg.stopIds.length})`);
+      }
     }
   }
 
-  for (const bus of Object.values(s.buses)) {
-    if (bus.plan.length > 0 || openStops.length === 0) continue;
-
-    const plan = await planRoute(bus, openStops, s.requests, config, travelTime, s.dropOffHubs, s.time);
-    if (plan.length === 0) continue;
-
-    bus.plan = plan;
-    bus.legIndex = 0;
-    bus.legStartedAt = s.time;
-    s.kpi.assignments += 1;
-
-    for (const ps of plan) {
-      if (ps.kind !== "pickup" || ps.stopId == null) continue;
-      const stop = s.stops[ps.stopId];
-      if (stop) {
-        stop.status = "assigned";
-        stop.assignedBus = bus.id;
-      }
-      for (const rid of ps.boarding) {
-        const r = s.requests[rid];
-        if (r && r.status === "pending") {
-          r.assignedBus = bus.id;
-          r.tAssigned = s.time;
+  // 4b. Idle repositioning (issue #7, plan.md Phase 3e). A bus with no plan drifts
+  //     one tick's travel toward the nearest live-demand anchor — the stop itself
+  //     for inbound demand, the hub for outbound. Without this, buses freeze at
+  //     their last drop-off and the pickup-deadline feasibility check has nothing
+  //     reachable to do next tick.
+  if (config.rebalanceEnabled) {
+    const anchors: LatLng[] = [];
+    for (const st of Object.values(s.stops)) {
+      if (st.status !== "open" || st.dropOffHubIndex == null) continue;
+      if (liveStopRiders(st, s.requests, s.time).length === 0) continue;
+      const a = st.direction === "outbound" ? s.dropOffHubs[st.dropOffHubIndex] : st.position;
+      if (a) anchors.push(a);
+    }
+    if (anchors.length > 0) {
+      const stepKm = speedAt(s.time, config.speedProfile) / 60;
+      for (const bus of Object.values(s.buses)) {
+        if (bus.plan.length > 0) continue;
+        let target = anchors[0];
+        let bestD = Infinity;
+        for (const a of anchors) {
+          const d = haversine(bus.position, a);
+          if (d < bestD) {
+            bestD = d;
+            target = a;
+          }
         }
+        if (bestD < 0.05) continue;
+        const f = Math.min(1, stepKm / bestD);
+        bus.position = {
+          lat: bus.position.lat + (target.lat - bus.position.lat) * f,
+          lng: bus.position.lng + (target.lng - bus.position.lng) * f,
+        };
+        bus.positionHistory.push({ ...bus.position });
+        if (bus.positionHistory.length > 200) {
+          bus.positionHistory = bus.positionHistory.slice(-200);
+        }
+        const moved = Math.min(bestD, stepKm);
+        s.kpi.vehicleKm += moved;
+        s.kpi.deadheadKm += moved;
       }
     }
-
-    const routeLabel = plan
-      .map((ps) => (ps.kind === "hub" ? `H${(ps.hubIndex ?? 0) + 1}` : ps.stopId))
-      .join(",");
-    log.push(`t=${s.time}: bus ${bus.id} assigned route [${routeLabel}]`);
-    openStops = openStops.filter((st) => st.status === "open");
   }
 
   if (travelTime.degraded) s.travelTimeProviderDegraded = true;

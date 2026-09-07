@@ -1,3 +1,7 @@
+import { ObjectiveWeights, DEFAULT_OBJECTIVE } from "./objective";
+
+export type { ObjectiveWeights };
+
 // ── Core simulation types ──
 
 export interface LatLng {
@@ -105,6 +109,24 @@ export interface SimConfig {
   maxStopsPerRoute: number;
   timeBudgetMinutes: number;
   maxWaitMinutes: number;
+  /** Fixed dwell at a pickup stop, minutes; total pickup dwell = this + per-rider × riders. */
+  dwellPickupMin: number;
+  /** Per-rider dwell added at a pickup stop, minutes. */
+  dwellPickupPerRiderMin: number;
+  /** Dwell at a drop-off / hub-alight stop, minutes. */
+  dwellDropoffMin: number;
+  /** Run the dispatcher every N sim-minutes. 1 = every tick; ≥2 trades wait for match quality. */
+  batchWindowMinutes: number;
+  /**
+   * Drift idle buses toward live demand each tick (plan.md Phase 3e). On by
+   * default: with the pickup-deadline feasibility check now enforced, a bus
+   * frozen at its last drop-off is effectively locked out, so #7's "buses are
+   * no longer locked until they finish" goal needs this. Flip off to measure
+   * 3b/3c insertion in isolation.
+   */
+  rebalanceEnabled: boolean;
+  /** Cost weights the insertion dispatcher and benchmarks score routes with (issue #7). */
+  objective: ObjectiveWeights;
   useGoogleRouting: boolean;
   googleApiKey: string;
   /** Street-network circuity factor applied to haversine distance (LA grid ≈ 1.35). */
@@ -220,6 +242,12 @@ export const DEFAULT_CONFIG: SimConfig = {
   maxStopsPerRoute: 5,
   timeBudgetMinutes: 25,
   maxWaitMinutes: 10,
+  dwellPickupMin: 1,
+  dwellPickupPerRiderMin: 0.2,
+  dwellDropoffMin: 1,
+  batchWindowMinutes: 1,
+  rebalanceEnabled: true,
+  objective: DEFAULT_OBJECTIVE,
   useGoogleRouting: false,
   googleApiKey: "",
   detourFactor: 1.35,

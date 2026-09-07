@@ -38,7 +38,10 @@ src/engine/simulator.ts     The clock. simulateStep(state, config) -> Promise<Si
 src/engine/rng.ts           Seeded mulberry32 PRNG; state is one int, so it clones
 src/engine/simulator.test.ts  Determinism + invariant tests (node env)
 src/services/stops.ts       Riders -> persistent virtual stops keyed by ~150m grid cell (issue #5)
-src/services/planner.ts     Stops -> bus routes (greedy nearest-neighbor + drop-off legs)
+src/engine/objective.ts     The single definition of "better" — objectiveCost(parts, weights) (issue #7)
+src/engine/dispatch.ts      Shipment-model Dispatcher interface + InsertionDispatcher: feasibility
+                            pass + marginal-detour insertion + regret-2 batch (issue #7)
+src/services/itinerary.ts   LiteStop[] chosen by the dispatcher -> materialised PlanStop[] (ETAs + geometry)
 src/services/routing.ts     haversine fallback / Google DirectionsService wrapper
 src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state
 src/components/             SimulationMap (Google), FallbackMap (SVG), controls, metrics
@@ -54,8 +57,16 @@ src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
 3. Fold pending riders into the persistent grid-snapped stop set (`maintainStops`) — stops are
    keyed `(gridCellId, direction, hubIndex)` and live across ticks; a later rider in the same cell
    joins the existing stop. Empty stops are retired; no max-wait expiry (issue #5)
-4. Assign a `PlanStop[]` itinerary to each idle bus (`planRoute`), inbound stops only — idle means
-   `bus.plan.length === 0`
+4. Dispatch (`InsertionDispatcher.dispatch`, issue #7). Open inbound *and* outbound stops become
+   shipments; every bus with spare capacity — not only idle ones — is a candidate. Each stop is
+   inserted at the min-`objectiveCost` position of some bus's live itinerary that passes the
+   feasibility pass (load profile ≤ capacity at every point, every rider boards by
+   `promisedPickupBy`, no rider past `maxRideTimeMin`, whole itinerary ≤ `timeBudgetMinutes`).
+   Batch commit order is regret-2. Runs every `batchWindowMinutes` ticks.
+4b. Idle repositioning (`config.rebalanceEnabled`, default on — plan.md Phase 3e): a bus with no
+   plan drifts one tick's travel toward the nearest live-demand anchor. On by default because with
+   the pickup-deadline check enforced a frozen idle bus is effectively locked out; flip off to
+   isolate 3b/3c.
 5. Recompute metrics, `time += 1`
 
 **Rider lifecycle:** `pending` → `picked_up` → `completed`. Since issue #4, `picked_up` is set when the
@@ -85,8 +96,9 @@ console.log(s.metrics);
 
 `simulateStep` deep-clones state via `structuredClone` and returns a new `SimState`, so every
 tick is inspectable and snapshot-testable. `SimConfig` is the complete parameter surface —
-sweeping `numBuses`, `maxWalkKm`, `minGroupSize`, `maxStopsPerRoute`, `timeBudgetMinutes`, and
-`maxWaitMinutes` in a loop is the natural way to evaluate an algorithm change.
+sweeping `numBuses`, `maxWalkKm`, `minGroupSize`, `maxStopsPerRoute`, `timeBudgetMinutes`,
+`maxWaitMinutes`, `batchWindowMinutes` and the `objective` weights in a loop is the natural way
+to evaluate an algorithm change.
 
 ### Runs are deterministic — pin `config.seed`
 
@@ -103,19 +115,24 @@ When comparing algorithm variants, hold the seed fixed and change one parameter.
 seeds before believing a result — one seed is an anecdote.
 
 **Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
-with the haversine `TravelTimeProvider` (`bench/baseline.json`): ~363 requests, **~227 pending,
-~124 unserved, ~4 completed**, ~234 stops, ~12 bus assignments. Requests split roughly ⅓ inbound / ⅓
-outbound / ⅓ `unserved` (neither end within `hubCatchmentKm` of a hub). Only inbound stops are
-dispatched — outbound needs board-at-hub routing, so ~124 of the ~227 `pending` are
-outbound riders parked until the Phase 3 dispatcher. Completions are near zero over 60 min because the
-single-shot greedy planner can't finish many hub deliveries in the horizon.
+with the haversine `TravelTimeProvider` (`bench/baseline.json`, re-recorded for issue #7):
+~363 requests, **~229 pending, ~124 unserved, ~7 completed, ~182 expired**, ~231 stops,
+~11 bus assignments, waitP50 ~7 min, poolingRate ~34%, detourRatio ~1.26. Requests split roughly
+⅓ inbound / ⅓ outbound / ⅓ `unserved`. Both inbound and outbound stops are now dispatched.
+Throughput is still low but for a *different* reason than before issue #7: the feasibility pass
+now enforces `promisedPickupBy` (`tRequest + maxWaitMinutes`, default 10) and a whole-itinerary
+`timeBudgetMinutes` (default 25) as hard gates, and with an 8-vehicle fleet spread over the LA
+basin most requests can't be reached inside a 10-minute promise — they age out as `expired`.
+The old ~4 completions came from the greedy planner *starting* long trips it couldn't finish;
+the new completions are trips actually delivered (waitP50 26→7, pooling 21%→34%). Raising
+`numBuses`, `timeBudgetMinutes` or `maxWaitMinutes` moves service rate up smoothly — fleet and
+policy tuning is what the downstream tickets (#8, #9, #11, #12) are for.
 The issue-#5 change (persistent grid-snapped stops, `minGroupSize` default 1) inflated
 `totalStops` ~10→~234: every occupied ~150 m cell — inbound *and* outbound, lone riders included —
 is now one stable stop that lives across ticks instead of a per-tick centroid that expired and
-re-formed. That is a meaning change, not a regression; throughput is still the Phase 3
-target. Record metrics before and after any planner/stops change
-rather than judging by watching the map, and note which `TravelTimeProvider` a benchmark used
-since haversine and Google runs aren't comparable.
+re-formed. That is a meaning change, not a regression. Record metrics before and after any
+dispatcher/stops change rather than judging by watching the map, and note which
+`TravelTimeProvider` a benchmark used since haversine and Google runs aren't comparable.
 
 Since issue #6 the engine computes the full KPI set (`src/engine/metrics.ts`, `computeMetrics`)
 from rider timestamps and per-tick vehicle accounting (`SimState.kpi`): service/pooling rates,
@@ -162,13 +179,24 @@ only the build and test scaffolding is tied to the platform.
 - **`metrics.busAssignments` is a plain counter** (`SimState.kpi.assignments`, incremented in
   `simulateStep` step 4) since issue #6 — no longer string-matched out of the event log. The
   event log is now a ring buffer capped at `EVENT_LOG_LIMIT` (500) and nothing rescans it.
+  Since issue #7 it counts one per *vehicle touched per dispatch tick*, so a bus that keeps
+  absorbing insertions across ticks is counted once per tick.
+- **The dispatcher reasons in `LiteStop[]`, the simulator drives `PlanStop[]`.** `dispatch.ts` is
+  sync and dependency-free (`simulateItinerary` only reads `provider.time`); `itinerary.ts`
+  turns the chosen plan into `PlanStop[]` with display geometry. A bus that gets new stops has
+  its whole remaining itinerary re-materialised from its current position (`legIndex` → 0).
+- **Feasibility gates are hard, not soft.** A rider past `promisedPickupBy` is dropped from its
+  shipment (it can only surface as `expired`), never picked up late. `timeBudgetMinutes` now
+  covers the first leg and the drop-off legs — the pre-#7 planner exempted the first leg, so the
+  same numeric budget is effectively tighter now.
 - **`tsconfig` is loose**: `strictNullChecks: false`, `noImplicitAny: false`. A clean `tsc` does
   not imply null-safety.
-- **`useGoogleRouting` is opt-in and degrades silently.** Without an API key, `planRoute` uses
-  haversine + constant speed and synthesizes L-shaped grid paths for display. Results differ
+- **`useGoogleRouting` is opt-in and degrades silently.** Without an API key, the dispatcher uses
+  haversine + a time-of-day speed and `itinerary.ts` synthesizes L-shaped grid paths for display. Results differ
   substantially between the two modes — state which one a benchmark used.
 - **Drop-off hubs persist in `localStorage`** under `sim-dropoff-hubs` when locked (`Index.tsx`).
-  Headless runs must set `state.dropOffHubs` manually; with no hubs, buses do pickups only.
+  Headless runs must set `state.dropOffHubs` manually; with no hubs nothing is classified
+  inbound/outbound, so no shipments form and buses never move.
 - **`@/` aliases `./src`** in three places: `vite.config.ts`, `vitest.config.ts`, and
   `tsconfig.json`. A new build entry point means updating all three.
 
