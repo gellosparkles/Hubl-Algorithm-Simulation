@@ -146,6 +146,23 @@ re-formed. That is a meaning change, not a regression. Record metrics before and
 dispatcher/stops change rather than judging by watching the map, and note which
 `TravelTimeProvider` a benchmark used since haversine and Google runs aren't comparable.
 
+**The `plan.md` ≥60% service-rate acceptance gate is not met at `DEFAULT_CONFIG`, and issue #13
+concluded it is not reachable there without a design change** (denser rider generation, a
+different pickup-promise model, or fleet-vs-area rebalancing — none in #13's scope). The binding
+constraint is geometry, not a bug: at a mid-run tick, ~40 open shipments against 7 idle buses
+yield *zero* feasible (bus, shipment) pairs — ~98% of rejections are `pickup-window` (a bus
+spread across the basin can't reach a random stop inside `tRequest + maxWaitMinutes`). ~34% of
+requests are `unserved` regardless of fleet (two hubs can't cover the basin), and each bus
+serves ~1 rider per ~20-min round trip because ~150 m cells + 6 req/min almost never pool a
+stop — so max throughput ≈ (fleet × 3)/hr against ~370 demand. One-at-a-time sweeps (5 seeds,
+haversine, all else default) are monotonic and explicable: `numBuses` 4→24 lifts service
+0.6%→3.2% (occupancy 0.53→0.95); `batchWindowMinutes` 1→10 drops it 1.2%→0.7% (staler batches);
+`timeBudgetMinutes` 15→50 lifts it 1.1%→2.5% (occupancy 0.48→1.29). Two knobs are inert or
+cliff-edged *because of the ~150 m grid stops* (issue #5), not a regression: **`maxWalkKm` has
+no effect at all** (0.25–2.0 km identical — a rider is always in their stop's cell, so walk ≈ 0
+and the gate never binds), and **`minGroupSize ≥ 2` collapses service to exactly 0%** (no cell
+ever holds two concurrent pending riders, so no stop ever reaches the dispatch threshold).
+
 Since issue #6 the engine computes the full KPI set (`src/engine/metrics.ts`, `computeMetrics`)
 from rider timestamps and per-tick vehicle accounting (`SimState.kpi`): service/pooling rates,
 wait & in-vehicle P50/P90, detour ratio, vehicle-km, deadhead share, time-weighted occupancy,

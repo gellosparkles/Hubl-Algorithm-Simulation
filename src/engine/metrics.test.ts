@@ -133,7 +133,7 @@ describe("engine wiring", () => {
 
     expect(s.eventLog.length).toBeLessThanOrEqual(EVENT_LOG_LIMIT);
     expect(s.metrics.busAssignments).toBeGreaterThan(0);
-  });
+  }, 20000); // 220-tick run at 10 req/min sits near the 5s default under parallel load
 
   it("accumulates vehicle-km past the positionHistory cap", async () => {
     const config: SimConfig = { ...DEFAULT_CONFIG, seed: 7, simMinutes: 90 };
