@@ -15,6 +15,37 @@ import { HaversineProvider } from "@/services/travelTime";
 const provider = new HaversineProvider(DEFAULT_CONFIG.detourFactor, DEFAULT_CONFIG.speedProfile);
 const config: SimConfig = { ...DEFAULT_CONFIG };
 
+/** The `directTimeMin` the fixtures' riders use — kept explicit for `relativeDetourLimit`. */
+const FIXTURE_DIRECT_MIN = 10;
+
+/** Vehicle fixture — fills the shipment-model cost fields with the defaults. */
+function vhcl(v: Omit<Vehicle, "costPerKm" | "costPerHour" | "fixedCost">): Vehicle {
+  return {
+    costPerKm: DEFAULT_OBJECTIVE.costPerKm,
+    costPerHour: DEFAULT_OBJECTIVE.costPerHour,
+    fixedCost: 0,
+    ...v,
+  };
+}
+
+/** Shipment fixture — takes flat pickup/delivery points and fills the detour + penalty fields. */
+function shpmt(
+  s: Omit<Shipment, "pickups" | "deliveries" | "relativeDetourLimit" | "penaltyCost"> & {
+    pickup: LatLng;
+    delivery: LatLng;
+    pickupBy: number;
+  }
+): Shipment {
+  const { pickup, delivery, pickupBy, ...rest } = s;
+  return {
+    ...rest,
+    pickups: [{ location: pickup, timeWindowEnd: pickupBy }],
+    deliveries: [{ location: delivery, timeWindowEnd: null }],
+    relativeDetourLimit: rest.maxRideTimeMin / FIXTURE_DIRECT_MIN - 1,
+    penaltyCost: DEFAULT_OBJECTIVE.unservedPenalty * rest.load,
+  };
+}
+
 function meta(partial: Partial<RiderMeta> = {}): RiderMeta {
   return {
     tRequest: 0,
@@ -120,20 +151,20 @@ describe("bestInsertion — marginal detour prefers the corridor", () => {
   const wide: SimConfig = { ...config, timeBudgetMinutes: 120 };
   const A: LatLng = { lat: 34.02, lng: -118.30 };
   const H = offset(A, 10, 0); // hub 10 km due east of the bus
-  const idleBus: Vehicle = { id: 1, loadLimit: 12, position: A, onboard: [], plan: [] };
+  const idleBus: Vehicle = vhcl({ id: 1, loadLimit: 12, position: A, onboard: [], plan: [] });
 
   function inboundShipment(id: number, stopPos: LatLng): Shipment {
-    return {
+    return shpmt({
       id,
       direction: "inbound",
       hubIndex: 0,
-      pickup: { location: stopPos },
-      delivery: { location: H },
+      pickup: stopPos,
+      delivery: H,
       load: 1,
       riderIds: [id],
-      pickupTimeWindowEnd: 100,
+      pickupBy: 100,
       maxRideTimeMin: 120,
-    };
+    });
   }
 
   it("a farther stop on the A→H line beats a nearer stop perpendicular to it", () => {
@@ -159,23 +190,23 @@ describe("bestInsertion — inbound and outbound share one code path", () => {
   it("seeds [pickup, hub] for inbound and [hub, dropoff] for outbound", () => {
     const riders = new Map([[1, meta()]]);
     const inbound = bestInsertion(
-      { id: 1, loadLimit: 12, position: offset(hub, 3, 0), onboard: [], plan: [] },
-      {
+      vhcl({ id: 1, loadLimit: 12, position: offset(hub, 3, 0), onboard: [], plan: [] }),
+      shpmt({
         id: 1, direction: "inbound", hubIndex: 0,
-        pickup: { location: offset(hub, 3, 0) }, delivery: { location: hub },
-        load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
-      },
+        pickup: offset(hub, 3, 0), delivery: hub,
+        load: 1, riderIds: [1], pickupBy: 100, maxRideTimeMin: 120,
+      }),
       riders, config, 0, provider
     );
     expect(inbound!.lite.map((s) => s.kind)).toEqual(["pickup", "hub"]);
 
     const outbound = bestInsertion(
-      { id: 2, loadLimit: 12, position: hub, onboard: [], plan: [] },
-      {
+      vhcl({ id: 2, loadLimit: 12, position: hub, onboard: [], plan: [] }),
+      shpmt({
         id: 2, direction: "outbound", hubIndex: 0,
-        pickup: { location: hub }, delivery: { location: offset(hub, 3, 0) },
-        load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
-      },
+        pickup: hub, delivery: offset(hub, 3, 0),
+        load: 1, riderIds: [1], pickupBy: 100, maxRideTimeMin: 120,
+      }),
       riders, config, 0, provider
     );
     expect(outbound!.lite.map((s) => s.kind)).toEqual(["hub", "dropoff"]);
@@ -193,7 +224,7 @@ describe("InsertionDispatcher", () => {
       [1, meta({ boardedAt: 0 })], // aboard bus 2
       [2, meta()], // waiting at the new stop
     ]);
-    const busyBus: Vehicle = {
+    const busyBus: Vehicle = vhcl({
       id: 2,
       loadLimit: 12,
       position: offset(hub, 3, 0),
@@ -202,13 +233,13 @@ describe("InsertionDispatcher", () => {
         { kind: "pickup", position: offset(hub, 2.2, 0.1), stopId: 5, hubIndex: 0, boarding: [], alighting: [] },
         { kind: "hub", position: hub, stopId: null, hubIndex: 0, boarding: [], alighting: [1] },
       ],
-    };
-    const idleFar: Vehicle = { id: 1, loadLimit: 12, position: offset(hub, 40, 40), onboard: [], plan: [] };
-    const shipment: Shipment = {
+    });
+    const idleFar: Vehicle = vhcl({ id: 1, loadLimit: 12, position: offset(hub, 40, 40), onboard: [], plan: [] });
+    const shipment: Shipment = shpmt({
       id: 9, direction: "inbound", hubIndex: 0,
-      pickup: { location: near }, delivery: { location: hub },
-      load: 1, riderIds: [2], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
-    };
+      pickup: near, delivery: hub,
+      load: 1, riderIds: [2], pickupBy: 100, maxRideTimeMin: 120,
+    });
 
     const result = await new InsertionDispatcher().dispatch(
       { shipments: [shipment], vehicles: [idleFar, busyBus], riders, now: 0 },
@@ -227,18 +258,18 @@ describe("InsertionDispatcher", () => {
       [1, meta()],
       [2, meta()],
     ]);
-    const b1: Vehicle = { id: 1, loadLimit: 1, position: offset(hub, 1, 0), onboard: [], plan: [] };
-    const b2: Vehicle = { id: 2, loadLimit: 12, position: offset(hub, 1.5, 0), onboard: [], plan: [] };
-    const shipA: Shipment = {
+    const b1: Vehicle = vhcl({ id: 1, loadLimit: 1, position: offset(hub, 1, 0), onboard: [], plan: [] });
+    const b2: Vehicle = vhcl({ id: 2, loadLimit: 12, position: offset(hub, 1.5, 0), onboard: [], plan: [] });
+    const shipA: Shipment = shpmt({
       id: 1, direction: "inbound", hubIndex: 0,
-      pickup: { location: offset(hub, 1, 0) }, delivery: { location: hub },
-      load: 1, riderIds: [1], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
-    };
-    const shipB: Shipment = {
+      pickup: offset(hub, 1, 0), delivery: hub,
+      load: 1, riderIds: [1], pickupBy: 100, maxRideTimeMin: 120,
+    });
+    const shipB: Shipment = shpmt({
       id: 2, direction: "inbound", hubIndex: 0,
-      pickup: { location: offset(hub, 1.5, 0) }, delivery: { location: hub },
-      load: 1, riderIds: [2], pickupTimeWindowEnd: 100, maxRideTimeMin: 120,
-    };
+      pickup: offset(hub, 1.5, 0), delivery: hub,
+      load: 1, riderIds: [2], pickupBy: 100, maxRideTimeMin: 120,
+    });
     const result = await new InsertionDispatcher().dispatch(
       { shipments: [shipA, shipB], vehicles: [b1, b2], riders, now: 0 },
       config,
@@ -266,21 +297,22 @@ describe("InsertionDispatcher", () => {
       [1, meta({ directTimeMin: 20, maxRideTimeMin: 300, promisedPickupBy: 300 })],
       [2, meta({ directTimeMin: 20, maxRideTimeMin: 300, promisedPickupBy: 300 })],
     ]);
-    const ship = (id: number, pos: LatLng): Shipment => ({
-      id,
-      direction: "inbound",
-      hubIndex: 0,
-      pickup: { location: pos },
-      delivery: { location: H },
-      load: 1,
-      riderIds: [id],
-      pickupTimeWindowEnd: 300,
-      maxRideTimeMin: 300,
-    });
+    const ship = (id: number, pos: LatLng): Shipment =>
+      shpmt({
+        id,
+        direction: "inbound",
+        hubIndex: 0,
+        pickup: pos,
+        delivery: H,
+        load: 1,
+        riderIds: [id],
+        pickupBy: 300,
+        maxRideTimeMin: 300,
+      });
     const shipments = [ship(1, S1), ship(2, S2)];
     const vehicles: Vehicle[] = [
-      { id: 1, loadLimit: 1, position: B1, onboard: [], plan: [] },
-      { id: 2, loadLimit: 1, position: B2, onboard: [], plan: [] },
+      vhcl({ id: 1, loadLimit: 1, position: B1, onboard: [], plan: [] }),
+      vhcl({ id: 2, loadLimit: 1, position: B2, onboard: [], plan: [] }),
     ];
 
     const totalCost = (asg: { vehicleId: number; lite: LiteStop[] }[]): number => {

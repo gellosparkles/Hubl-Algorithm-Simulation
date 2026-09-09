@@ -1,0 +1,102 @@
+{
+  "nowMinutes": 10,
+  "globalDurationBudgetMinutes": 25,
+  "shipments": [
+    {
+      "label": "stop-101",
+      "direction": "inbound",
+      "pickups": [
+        {
+          "arrivalLocation": {
+            "latitude": 34.06,
+            "longitude": -118.21
+          },
+          "timeWindowEndMinutes": 12
+        }
+      ],
+      "deliveries": [
+        {
+          "arrivalLocation": {
+            "latitude": 34.05,
+            "longitude": -118.24
+          }
+        }
+      ],
+      "loadDemands": {
+        "riders": {
+          "amount": 2
+        }
+      },
+      "pickupToDeliveryAbsoluteDetourLimitMinutes": 25,
+      "pickupToDeliveryRelativeDetourLimit": 1.5,
+      "penaltyCost": 1000
+    },
+    {
+      "label": "stop-102",
+      "direction": "outbound",
+      "pickups": [
+        {
+          "arrivalLocation": {
+            "latitude": 34.05,
+            "longitude": -118.24
+          },
+          "timeWindowEndMinutes": 10
+        }
+      ],
+      "deliveries": [
+        {
+          "arrivalLocation": {
+            "latitude": 34.04,
+            "longitude": -118.27
+          }
+        }
+      ],
+      "loadDemands": {
+        "riders": {
+          "amount": 1
+        }
+      },
+      "pickupToDeliveryAbsoluteDetourLimitMinutes": 30,
+      "pickupToDeliveryRelativeDetourLimit": 2,
+      "penaltyCost": 500
+    }
+  ],
+  "vehicles": [
+    {
+      "label": "bus-1",
+      "loadLimits": {
+        "riders": {
+          "maxLoad": 12
+        }
+      },
+      "costPerKilometer": 1,
+      "costPerHour": 30,
+      "fixedCost": 0,
+      "startLocation": {
+        "latitude": 34.07,
+        "longitude": -118.19
+      },
+      "onboardRiderIds": [],
+      "committedVisits": 0
+    },
+    {
+      "label": "bus-2",
+      "loadLimits": {
+        "riders": {
+          "maxLoad": 8
+        }
+      },
+      "costPerKilometer": 1,
+      "costPerHour": 30,
+      "fixedCost": 0,
+      "startLocation": {
+        "latitude": 34.05,
+        "longitude": -118.24
+      },
+      "onboardRiderIds": [
+        7
+      ],
+      "committedVisits": 1
+    }
+  ]
+}

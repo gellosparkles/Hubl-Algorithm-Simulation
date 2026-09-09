@@ -40,7 +40,11 @@ src/engine/simulator.test.ts  Determinism + invariant tests (node env)
 src/services/stops.ts       Riders -> persistent virtual stops keyed by ~150m grid cell (issue #5)
 src/engine/objective.ts     The single definition of "better" — objectiveCost(parts, weights) (issue #7)
 src/engine/dispatch.ts      Shipment-model Dispatcher interface + InsertionDispatcher: feasibility
-                            pass + marginal-detour insertion + regret-2 batch (issue #7)
+                            pass + marginal-detour insertion + regret-2 batch (issue #7). The
+                            Shipment/Vehicle/DispatchResult contract is a frozen Google Route
+                            Optimization-shaped shipment model (issue #12)
+src/engine/shipmentModel.ts  serializeShipmentModel() — the dispatch-input contract as a plain
+                            object, locked by a golden file; API mapping in docs/dispatch-shipment-model.md (issue #12)
 src/services/itinerary.ts   LiteStop[] chosen by the dispatcher -> materialised PlanStop[] (ETAs + geometry)
 src/services/trackedRider.ts  Read-model for the one manually-injected rider a person is watching (issue #11)
 src/services/routing.ts     haversine fallback / Google DirectionsService wrapper

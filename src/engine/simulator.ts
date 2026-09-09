@@ -472,16 +472,27 @@ export async function simulateStep(
       const rids = liveStopRiders(st, s.requests, s.time);
       if (rids.length === 0) continue;
       stopRiders.set(st.id, rids);
+      const pickupBy = Math.min(...rids.map((rid) => s.requests[rid].promisedPickupBy));
+      // Pickup is where the vehicle collects the load (stop for inbound, hub for
+      // outbound); delivery is the other end.
+      const pickupLoc = st.direction === "inbound" ? st.position : hub;
+      const deliveryLoc = st.direction === "inbound" ? hub : st.position;
       shipments.push({
         id: st.id,
         direction: st.direction,
         hubIndex: st.dropOffHubIndex,
-        pickup: { location: st.direction === "inbound" ? st.position : hub },
-        delivery: { location: st.direction === "inbound" ? hub : st.position },
+        pickups: [{ location: pickupLoc, timeWindowEnd: pickupBy }],
+        deliveries: [{ location: deliveryLoc, timeWindowEnd: null }],
         load: rids.length,
         riderIds: rids,
-        pickupTimeWindowEnd: Math.min(...rids.map((rid) => s.requests[rid].promisedPickupBy)),
         maxRideTimeMin: Math.min(...rids.map((rid) => s.requests[rid].maxRideTimeMin)),
+        relativeDetourLimit: Math.min(
+          ...rids.map((rid) => {
+            const r = s.requests[rid];
+            return r.directTimeMin > 0 ? r.maxRideTimeMin / r.directTimeMin - 1 : Infinity;
+          })
+        ),
+        penaltyCost: config.objective.unservedPenalty * rids.length,
       });
     }
     shipments.sort((a, b) => a.id - b.id);
@@ -512,6 +523,9 @@ export async function simulateStep(
           position: { ...bus.position },
           onboard: [...bus.onboard],
           plan: remaining,
+          costPerKm: config.objective.costPerKm,
+          costPerHour: config.objective.costPerHour,
+          fixedCost: 0,
         };
       });
 
@@ -522,7 +536,10 @@ export async function simulateStep(
         const byKey = new Map<string, LatLng>();
         for (const p of [
           ...vehicles.map((v) => v.position),
-          ...shipments.flatMap((sh) => [sh.pickup.location, sh.delivery.location]),
+          ...shipments.flatMap((sh) => [
+            ...sh.pickups.map((p) => p.location),
+            ...sh.deliveries.map((d) => d.location),
+          ]),
         ]) {
           byKey.set(`${p.lat.toFixed(4)},${p.lng.toFixed(4)}`, p);
         }
