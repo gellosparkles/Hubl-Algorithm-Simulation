@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { SimConfig, SimState, DEFAULT_CONFIG, LatLng } from "@/engine/types";
 import { createInitialState, simulateStep, resetReqCounter } from "@/engine/simulator";
 import SimulationControls from "@/components/SimulationControls";
-import MetricsDashboard from "@/components/MetricsDashboard";
+import KpiDashboard, { KpiSample } from "@/components/KpiDashboard";
 import SimulationMap from "@/components/SimulationMap";
 import FallbackMap from "@/components/FallbackMap";
 import MapLegend from "@/components/MapLegend";
@@ -26,6 +26,7 @@ export default function Index() {
     return initial;
   });
   const [hubsLocked, setHubsLocked] = useState(() => !!loadLockedHubs());
+  const [kpiHistory, setKpiHistory] = useState<KpiSample[]>([]);
   const [placingDropOff, setPlacingDropOff] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const busyRef = useRef(false);
@@ -66,6 +67,7 @@ export default function Index() {
     stop();
     resetReqCounter();
     const initial = createInitialState(config);
+    setKpiHistory([]);
     if (hubsLocked) {
       const saved = loadLockedHubs();
       if (saved) initial.dropOffHubs = saved;
@@ -108,6 +110,21 @@ export default function Index() {
       dropOffHubs: s.dropOffHubs.filter((_, i) => i !== index),
     }));
   }, []);
+
+  // Accumulate the KPI time series — the engine keeps no history.
+  useEffect(() => {
+    setKpiHistory((h) => {
+      if (h.length && h[h.length - 1].minute === state.time) return h;
+      return [
+        ...h,
+        {
+          minute: state.time,
+          serviceRate: state.metrics.serviceRate,
+          waitP90Min: state.metrics.waitP90Min,
+        },
+      ];
+    });
+  }, [state.time, state.metrics]);
 
   // cleanup on unmount
   useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
@@ -163,7 +180,7 @@ export default function Index() {
 
         {/* Bottom metrics */}
         <div className="border-t border-border bg-card">
-          <MetricsDashboard metrics={state.metrics} eventLog={state.eventLog} />
+          <KpiDashboard metrics={state.metrics} history={kpiHistory} />
         </div>
       </main>
     </div>
