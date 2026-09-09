@@ -6,6 +6,7 @@ import {
   Polyline,
 } from "@react-google-maps/api";
 import { SimState, LatLng } from "@/engine/types";
+import { TrackedOverlay, EMPTY_OVERLAY } from "@/components/mapInteraction";
 import { decodePolyline } from "@/services/routing";
 
 const MAP_CENTER = { lat: 34.05, lng: -118.35 };
@@ -16,10 +17,19 @@ interface Props {
   apiKey: string;
   onBusDrag?: (busId: number, position: { lat: number; lng: number }) => void;
   onMapClick?: (pos: LatLng) => void;
-  placingDropOff?: boolean;
+  placing?: boolean;
+  overlay?: TrackedOverlay;
 }
 
-export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, placingDropOff }: Props) {
+export default function SimulationMap({
+  state,
+  apiKey,
+  onBusDrag,
+  onMapClick,
+  placing,
+  overlay = EMPTY_OVERLAY,
+}: Props) {
+  const { pickup: manualPickup, dest: manualDest, trackedStopId, trackedBusId } = overlay;
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: apiKey,
   });
@@ -34,10 +44,10 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
   }, []);
 
   const handleMapClick = useCallback((e: google.maps.MapMouseEvent) => {
-    if (placingDropOff && e.latLng && onMapClick) {
+    if (placing && e.latLng && onMapClick) {
       onMapClick({ lat: e.latLng.lat(), lng: e.latLng.lng() });
     }
-  }, [placingDropOff, onMapClick]);
+  }, [placing, onMapClick]);
 
   const busEntries = useMemo(() => Object.values(state.buses), [state.buses]);
   const stopEntries = useMemo(() => Object.values(state.stops), [state.stops]);
@@ -98,7 +108,7 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
         disableDefaultUI: false,
         zoomControl: true,
         mapTypeControl: false,
-        draggableCursor: placingDropOff ? "crosshair" : undefined,
+        draggableCursor: placing ? "crosshair" : undefined,
       }}
     >
       {/* Buses */}
@@ -115,11 +125,11 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
           label={{ text: `B${bus.id}`, color: "#fff", fontSize: "10px", fontWeight: "bold" }}
           icon={{
             path: google.maps.SymbolPath.CIRCLE,
-            scale: 10,
+            scale: bus.id === trackedBusId ? 14 : 10,
             fillColor: bus.plan.length === 0 ? "#1a8cff" : "#2db87a",
             fillOpacity: 1,
-            strokeColor: "#fff",
-            strokeWeight: 2,
+            strokeColor: bus.id === trackedBusId ? "#ff3ea5" : "#fff",
+            strokeWeight: bus.id === trackedBusId ? 4 : 2,
           }}
           title={`Bus ${bus.id} – ${bus.plan.length === 0 ? "Available" : `${bus.onboard.length} onboard`}${bus.plan.length === 0 && !state.running ? " (drag to reposition)" : ""}`}
         />
@@ -132,11 +142,11 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
           position={stop.position}
           icon={{
             path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-            scale: 4,
+            scale: stop.id === trackedStopId ? 7 : 4,
             fillColor: stop.status === "open" ? "#e6a817" : "#4d9de0",
             fillOpacity: 0.9,
-            strokeColor: "#fff",
-            strokeWeight: 1,
+            strokeColor: stop.id === trackedStopId ? "#ff3ea5" : "#fff",
+            strokeWeight: stop.id === trackedStopId ? 3 : 1,
           }}
           title={`Stop ${stop.id} – ${stop.riderIds.length} riders – ${stop.status}`}
         />
@@ -159,6 +169,40 @@ export default function SimulationMap({ state, apiKey, onBusDrag, onMapClick, pl
           title={`Drop-off Hub ${i + 1}`}
         />
       ))}
+
+      {/* Manual request pins (issue #11) */}
+      {manualPickup && (
+        <Marker
+          key="manual-pickup"
+          position={manualPickup}
+          label={{ text: "P", color: "#fff", fontSize: "9px", fontWeight: "bold" }}
+          icon={{
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#22c55e",
+            fillOpacity: 0.95,
+            strokeColor: "#fff",
+            strokeWeight: 2,
+          }}
+          title="Manual request — pickup"
+        />
+      )}
+      {manualDest && (
+        <Marker
+          key="manual-dest"
+          position={manualDest}
+          label={{ text: "×", color: "#fff", fontSize: "11px", fontWeight: "bold" }}
+          icon={{
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#ff3ea5",
+            fillOpacity: 0.95,
+            strokeColor: "#fff",
+            strokeWeight: 2,
+          }}
+          title="Manual request — destination"
+        />
+      )}
 
       {/* Trail polylines (past path) */}
       {trailLines.map((line, i) => (

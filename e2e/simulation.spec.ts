@@ -14,7 +14,7 @@ test.describe("simulation shell", () => {
 
     await expect(page.getByRole("button", { name: "Pause" })).toBeVisible();
     // Ticks every 400ms; the clock should leave 0 well within the default timeout.
-    await expect(page.getByText(/^[1-9]\d*$/)).toBeVisible();
+    await expect(page.getByText(/^[1-9]\d* min$/)).toBeVisible();
 
     await page.getByRole("button", { name: "Pause" }).click();
     await expect(page.getByRole("button", { name: "Start" })).toBeVisible();

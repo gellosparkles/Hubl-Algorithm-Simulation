@@ -52,7 +52,14 @@ function cloneLite(s: LiteStop): LiteStop {
   return { ...s, boarding: [...s.boarding], alighting: [...s.alighting] };
 }
 
-// ── Shipment model (Google Route Optimization-shaped) ──
+// ── Shipment model (Google Route Optimization `ShipmentModel`-shaped) ──
+//
+// This is the dispatcher's frozen input contract (issue #12). Every field maps
+// to a Google Route Optimization `ShipmentModel` counterpart — see
+// `docs/dispatch-shipment-model.md` and `serializeShipmentModel` in
+// `./shipmentModel.ts`, which the golden-file test locks. Swapping in an
+// OR-Tools / Route Optimization backend is a field-mapping exercise, not an
+// engine rewrite.
 
 /** Per-rider promise data a feasibility check needs. */
 export interface RiderMeta {
@@ -65,33 +72,71 @@ export interface RiderMeta {
   boardedAt: number | null;
 }
 
+/**
+ * One place a vehicle may perform a visit for a shipment. A shipment carrying
+ * more than one pickup `VisitRequest` is Google's way of expressing alternative
+ * pickup locations; the insertion dispatcher only reads `[0]`, but the contract
+ * carries the array so a solver adapter does not have to reshape it.
+ */
+export interface VisitRequest {
+  location: LatLng;
+  /** Latest sim-minute this visit may occur; null = unconstrained. */
+  timeWindowEnd: number | null;
+}
+
 export interface Shipment {
-  /** Virtual-stop id this shipment corresponds to. */
+  /** Virtual-stop id this shipment corresponds to (Google: `label`). */
   id: number;
   direction: "inbound" | "outbound";
   hubIndex: number;
-  /** Where the vehicle collects the load (the stop for inbound, the hub for outbound). */
-  pickup: { location: LatLng };
-  /** Where the vehicle delivers the load (the hub for inbound, the stop for outbound). */
-  delivery: { location: LatLng };
-  /** Load demand — rider count. */
+  /** Pickup alternatives — the stop for inbound, the hub for outbound. `[0]` is used. */
+  pickups: VisitRequest[];
+  /** Delivery alternatives — the hub for inbound, the stop for outbound. `[0]` is used. */
+  deliveries: VisitRequest[];
+  /** Load demand — rider count (Google: `loadDemands`). */
   load: number;
   riderIds: number[];
-  /** Latest sim-minute the load may be collected (min promised-pickup over its riders). */
-  pickupTimeWindowEnd: number;
-  /** Tightest max ride time over its riders (Google's detour limit). */
+  /**
+   * Absolute detour limit: tightest max ride time over the shipment's riders, in
+   * minutes (Google: `pickupToDeliveryAbsoluteDetourLimit`).
+   */
   maxRideTimeMin: number;
+  /**
+   * Relative detour limit: tightest `maxRideTime / directTime − 1` over the
+   * shipment's riders (Google: `pickupToDeliveryRelativeDetourLimit`). Carried
+   * explicitly so an adapter never has to back it out of two other fields.
+   */
+  relativeDetourLimit: number;
+  /**
+   * Cost charged to a solution that leaves this shipment unperformed (Google:
+   * `penaltyCost`). Sourced from `config.objective.unservedPenalty × load`.
+   */
+  penaltyCost: number;
+}
+
+/** Convenience accessors — the insertion dispatcher serves the first alternative. */
+export function shipmentPickup(sh: Shipment): LatLng {
+  return sh.pickups[0].location;
+}
+export function shipmentDelivery(sh: Shipment): LatLng {
+  return sh.deliveries[0].location;
 }
 
 export interface Vehicle {
   id: number;
-  /** Seat capacity. */
+  /** Seat capacity (Google: `loadLimits`). */
   loadLimit: number;
   position: LatLng;
   /** Rider ids currently aboard. */
   onboard: number[];
   /** Remaining committed itinerary in lite form; [] means idle. */
   plan: LiteStop[];
+  /** Cost per vehicle-km driven (Google: `costPerKilometer`). */
+  costPerKm: number;
+  /** Cost per vehicle-hour elapsed (Google: `costPerHour`). */
+  costPerHour: number;
+  /** Flat cost of using this vehicle at all (Google: `fixedCost`). */
+  fixedCost: number;
 }
 
 export interface DispatchRequest {
@@ -112,6 +157,12 @@ export interface VehicleAssignment {
 
 export interface DispatchResult {
   assignments: VehicleAssignment[];
+  /**
+   * Shipment ids no vehicle could feasibly take this batch (Google:
+   * `skippedShipments`). They stay open for the next batch; a caller scoring a
+   * whole solution prices each at its `penaltyCost`.
+   */
+  skippedShipmentIds: number[];
 }
 
 export interface Dispatcher {
@@ -285,7 +336,7 @@ export function bestInsertion(
   if (sh.direction === "inbound") {
     const pickup: LiteStop = {
       kind: "pickup",
-      position: sh.pickup.location,
+      position: shipmentPickup(sh),
       stopId: sh.id,
       hubIndex: sh.hubIndex,
       boarding: [...sh.riderIds],
@@ -294,7 +345,7 @@ export function bestInsertion(
     if (working.length === 0) {
       const hub: LiteStop = {
         kind: "hub",
-        position: sh.delivery.location,
+        position: shipmentDelivery(sh),
         stopId: null,
         hubIndex: sh.hubIndex,
         boarding: [],
@@ -313,7 +364,7 @@ export function bestInsertion(
   } else {
     const delivery: LiteStop = {
       kind: "dropoff",
-      position: sh.delivery.location,
+      position: shipmentDelivery(sh),
       stopId: sh.id,
       hubIndex: sh.hubIndex,
       boarding: [],
@@ -322,7 +373,7 @@ export function bestInsertion(
     if (working.length === 0) {
       const hub: LiteStop = {
         kind: "hub",
-        position: sh.pickup.location,
+        position: shipmentPickup(sh),
         stopId: null,
         hubIndex: sh.hubIndex,
         boarding: [...sh.riderIds],
@@ -446,6 +497,6 @@ export class InsertionDispatcher implements Dispatcher {
         stopIds: [...assignedTo].filter(([, v]) => v === vid).map(([s]) => s),
       });
     }
-    return { assignments };
+    return { assignments, skippedShipmentIds: [...remaining].sort((a, b) => a - b) };
   }
 }

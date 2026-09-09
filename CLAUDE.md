@@ -40,11 +40,17 @@ src/engine/simulator.test.ts  Determinism + invariant tests (node env)
 src/services/stops.ts       Riders -> persistent virtual stops keyed by ~150m grid cell (issue #5)
 src/engine/objective.ts     The single definition of "better" — objectiveCost(parts, weights) (issue #7)
 src/engine/dispatch.ts      Shipment-model Dispatcher interface + InsertionDispatcher: feasibility
-                            pass + marginal-detour insertion + regret-2 batch (issue #7)
+                            pass + marginal-detour insertion + regret-2 batch (issue #7). The
+                            Shipment/Vehicle/DispatchResult contract is a frozen Google Route
+                            Optimization-shaped shipment model (issue #12)
+src/engine/shipmentModel.ts  serializeShipmentModel() — the dispatch-input contract as a plain
+                            object, locked by a golden file; API mapping in docs/dispatch-shipment-model.md (issue #12)
 src/services/itinerary.ts   LiteStop[] chosen by the dispatcher -> materialised PlanStop[] (ETAs + geometry)
+src/services/trackedRider.ts  Read-model for the one manually-injected rider a person is watching (issue #11)
 src/services/routing.ts     haversine fallback / Google DirectionsService wrapper
-src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state
-src/components/             SimulationMap (Google), FallbackMap (SVG), controls, metrics
+src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state + the mapMode machine
+src/engine/simulator.ts     also exports injectRequest() — push a person's mid-run rider through the normal classify path (issue #11)
+src/components/             SimulationMap (Google), FallbackMap (SVG), controls, metrics, RiderRequestForm (issue #11)
 src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
 ```
 
@@ -139,6 +145,23 @@ is now one stable stop that lives across ticks instead of a per-tick centroid th
 re-formed. That is a meaning change, not a regression. Record metrics before and after any
 dispatcher/stops change rather than judging by watching the map, and note which
 `TravelTimeProvider` a benchmark used since haversine and Google runs aren't comparable.
+
+**The `plan.md` ≥60% service-rate acceptance gate is not met at `DEFAULT_CONFIG`, and issue #13
+concluded it is not reachable there without a design change** (denser rider generation, a
+different pickup-promise model, or fleet-vs-area rebalancing — none in #13's scope). The binding
+constraint is geometry, not a bug: at a mid-run tick, ~40 open shipments against 7 idle buses
+yield *zero* feasible (bus, shipment) pairs — ~98% of rejections are `pickup-window` (a bus
+spread across the basin can't reach a random stop inside `tRequest + maxWaitMinutes`). ~34% of
+requests are `unserved` regardless of fleet (two hubs can't cover the basin), and each bus
+serves ~1 rider per ~20-min round trip because ~150 m cells + 6 req/min almost never pool a
+stop — so max throughput ≈ (fleet × 3)/hr against ~370 demand. One-at-a-time sweeps (5 seeds,
+haversine, all else default) are monotonic and explicable: `numBuses` 4→24 lifts service
+0.6%→3.2% (occupancy 0.53→0.95); `batchWindowMinutes` 1→10 drops it 1.2%→0.7% (staler batches);
+`timeBudgetMinutes` 15→50 lifts it 1.1%→2.5% (occupancy 0.48→1.29). Two knobs are inert or
+cliff-edged *because of the ~150 m grid stops* (issue #5), not a regression: **`maxWalkKm` has
+no effect at all** (0.25–2.0 km identical — a rider is always in their stop's cell, so walk ≈ 0
+and the gate never binds), and **`minGroupSize ≥ 2` collapses service to exactly 0%** (no cell
+ever holds two concurrent pending riders, so no stop ever reaches the dispatch threshold).
 
 Since issue #6 the engine computes the full KPI set (`src/engine/metrics.ts`, `computeMetrics`)
 from rider timestamps and per-tick vehicle accounting (`SimState.kpi`): service/pooling rates,

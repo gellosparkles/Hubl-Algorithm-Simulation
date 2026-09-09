@@ -9,6 +9,15 @@
 
 ## Context
 
+> **Status (issue #13, post-rewrite):** the sections below describe the *pre-rewrite* starting
+> point. `clustering.ts` and `planner.ts` are retired — the shipped algorithm lives in
+> [`src/services/stops.ts`](src/services/stops.ts), [`src/engine/tripModel.ts`](src/engine/tripModel.ts)
+> and [`src/engine/dispatch.ts`](src/engine/dispatch.ts). The current `DEFAULT_CONFIG` baseline is
+> ~363 requests → ~4 completed / ~233 pending / ~124 unserved / ~186 expired (5 seeds, haversine —
+> `bench/baseline.json`), and the ≥60% acceptance gate in the Verification section below was
+> **not met**: issue #13 found it unreachable at `DEFAULT_CONFIG` without a design change. See the
+> "Baseline to beat" paragraph in `CLAUDE.md` for the diagnosis and parameter sweeps.
+
 `la-transit-navigator` is a browser-side on-demand transit simulator for the LA basin. Riders appear
 stochastically, are grouped into *virtual stops* by origin proximity, and capacity-limited buses are
 assigned chained pickup routes ending at user-placed drop-off hubs. The whole algorithm is ~250 lines
@@ -16,7 +25,7 @@ across [clustering.ts](src/services/clustering.ts) and
 [planner.ts](src/services/planner.ts), driven by
 [simulator.ts](src/engine/simulator.ts). There is no backend.
 
-**It does not work.** At `DEFAULT_CONFIG` over 60 minutes: ~372 requests → **~14 completed, ~297 still
+**It did not work.** At `DEFAULT_CONFIG` over 60 minutes: ~372 requests → **~14 completed, ~297 still
 pending**. Two root causes, both structural rather than tuning problems:
 
 1. **The trip model is fake.** `RiderRequest.destination` is generated and stored but never read.
@@ -485,7 +494,7 @@ npm run test:engine
 npm run bench -- --seeds 5 --minutes 60
 ```
 
-Compare against `bench/baseline.json` from Phase 0. Success criteria, haversine provider, 8 buses,
+Compare against `bench/baseline.json`. Success criteria, haversine provider, 8 buses,
 6 req/min, 60 min:
 
 - Service rate from ~4% to **≥ 60%**, with wait P90 ≤ `maxWaitMinutes` and mean detour ratio ≤ 1.6.
@@ -493,6 +502,15 @@ Compare against `bench/baseline.json` from Phase 0. Success criteria, haversine 
 - Sweep `numBuses`, `batchWindowMinutes`, `maxWalkKm`, `minGroupSize`, `timeBudgetMinutes` and confirm
   monotonic, explicable behavior. Hold the seed fixed and change one parameter at a time; sweep several
   seeds before believing any result.
+
+> **Issue #13 outcome:** the ≥60% gate is **not met** at `DEFAULT_CONFIG` (actual ~1.2%) and was
+> found unreachable there without a design change — the binding constraint is the pickup-promise
+> vs. an 8-bus fleet spread over the basin (≈98% of insertion rejections are `pickup-window`), plus
+> ~34% structurally `unserved` and near-zero stop pooling at ~150 m cells. Sweeps are monotonic and
+> explicable *except* two grid-granularity artefacts: `maxWalkKm` is completely inert (walk ≈ 0 at
+> ~150 m cells) and `minGroupSize ≥ 2` collapses service to 0% (no cell ever holds 2 concurrent
+> pending riders). Full diagnosis, sweep tables and the regenerated baseline: `CLAUDE.md`
+> "Baseline to beat".
 
 **UI.**
 
