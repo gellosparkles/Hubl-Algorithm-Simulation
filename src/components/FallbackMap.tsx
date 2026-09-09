@@ -5,12 +5,14 @@
 
 import { useRef, useEffect, useCallback } from "react";
 import { SimState, LA_BOUNDS, LatLng } from "@/engine/types";
+import { TrackedOverlay, EMPTY_OVERLAY } from "@/components/mapInteraction";
 
 interface Props {
   state: SimState;
   onMapClick?: (pos: LatLng) => void;
-  placingDropOff?: boolean;
+  placing?: boolean;
   onRemoveDropOff?: (index: number) => void;
+  overlay?: TrackedOverlay;
 }
 
 const ROUTE_COLORS = [
@@ -24,11 +26,18 @@ const ROUTE_COLORS = [
   "rgba(120,200,80,0.6)",
 ];
 
-export default function FallbackMap({ state, onMapClick, placingDropOff, onRemoveDropOff }: Props) {
+export default function FallbackMap({
+  state,
+  onMapClick,
+  placing,
+  onRemoveDropOff,
+  overlay = EMPTY_OVERLAY,
+}: Props) {
+  const { pickup: manualPickup, dest: manualDest, trackedStopId, trackedBusId } = overlay;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!placingDropOff || !onMapClick) return;
+    if (!placing || !onMapClick) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -40,7 +49,7 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
     const lng = lngMin + (x / w) * (lngMax - lngMin);
     const lat = latMax - (y / h) * (latMax - latMin);
     onMapClick({ lat, lng });
-  }, [placingDropOff, onMapClick]);
+  }, [placing, onMapClick]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -138,6 +147,14 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       const y = toY(stop.position.lat);
       const isOpen = stop.status === "open";
 
+      if (stop.id === trackedStopId) {
+        ctx.strokeStyle = "#ff3ea5";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 11, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
       // triangle marker
       ctx.fillStyle = isOpen ? "#e6a817" : "#4d9de0";
       ctx.beginPath();
@@ -190,6 +207,13 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
     for (const bus of busEntries) {
       const x = toX(bus.position.lng);
       const y = toY(bus.position.lat);
+      if (bus.id === trackedBusId) {
+        ctx.strokeStyle = "#ff3ea5";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(x, y, 14, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.fillStyle = bus.plan.length === 0 ? "#1a8cff" : "#2db87a";
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2;
@@ -217,19 +241,39 @@ export default function FallbackMap({ state, onMapClick, placingDropOff, onRemov
       }
     }
 
+    // ── Manual request pins (issue #11) ──
+    const drawPin = (p: LatLng, color: string, glyph: string) => {
+      const x = toX(p.lng);
+      const y = toY(p.lat);
+      ctx.fillStyle = color;
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 9px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(glyph, x, y);
+    };
+    if (manualPickup) drawPin(manualPickup, "#22c55e", "P");
+    if (manualDest) drawPin(manualDest, "#ff3ea5", "×");
+
     // header
     ctx.fillStyle = "rgba(255,255,255,0.6)";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText("Los Angeles Metro — Fallback View (no API key)", 10, 8);
-  }, [state]);
+  }, [state, manualPickup, manualDest, trackedStopId, trackedBusId]);
 
   return (
     <canvas
       ref={canvasRef}
       className="w-full h-full rounded-lg"
-      style={{ display: "block", cursor: placingDropOff ? "crosshair" : "default" }}
+      style={{ display: "block", cursor: placing ? "crosshair" : "default" }}
       onClick={handleCanvasClick}
     />
   );

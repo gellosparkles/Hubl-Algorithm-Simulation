@@ -209,6 +209,53 @@ export function resetReqCounter() {
   nextReqId = 1;
 }
 
+/**
+ * Inject a request a person placed on the map mid-run (issue #11). The new
+ * rider is classified against the live hub set by the exact same
+ * `classifyRequest` path generated riders take, then dropped into
+ * `state.requests` as `pending` (or terminal `unserved`). It is *not* clustered
+ * or dispatched here — the next `simulateStep` folds it into the persistent stop
+ * set and dispatches it like any other pending rider.
+ *
+ * Pure: returns a new `SimState` and never advances the seeded RNG, so the
+ * generated-rider stream (count and positions) is unchanged by an injection.
+ * It does consume one `nextReqId`, so subsequent rider ids shift by one.
+ */
+export function injectRequest(
+  state: SimState,
+  config: SimConfig,
+  origin: LatLng,
+  destination: LatLng
+): { state: SimState; requestId: number } {
+  const s = structuredClone(state) as SimState;
+  const travelTime = createTravelTimeProvider(config);
+  const trip = classifyRequest(origin, destination, s.time, s.dropOffHubs, config, travelTime);
+
+  const r: RiderRequest = {
+    id: nextReqId++,
+    tRequest: s.time,
+    origin: { ...origin },
+    destination: { ...destination },
+    direction: trip.direction,
+    hubIndex: trip.hubIndex,
+    assignedStop: null,
+    assignedBus: null,
+    status: trip.direction === "unserved" ? "unserved" : "pending",
+    walkDistanceKm: null,
+    tAssigned: null,
+    tPickedUp: null,
+    tDroppedOff: null,
+    promisedPickupBy: trip.promisedPickupBy,
+    directTimeMin: trip.directTimeMin,
+    maxRideTimeMin: trip.maxRideTimeMin,
+  };
+  s.requests[r.id] = r;
+
+  if (travelTime.degraded) s.travelTimeProviderDegraded = true;
+  s.metrics = computeMetrics(s);
+  return { state: s, requestId: r.id };
+}
+
 /** Stateless — one shared instance is fine across concurrent simulations. */
 const dispatcher: Dispatcher = new InsertionDispatcher();
 

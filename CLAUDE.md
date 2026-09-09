@@ -42,9 +42,11 @@ src/engine/objective.ts     The single definition of "better" — objectiveCost(
 src/engine/dispatch.ts      Shipment-model Dispatcher interface + InsertionDispatcher: feasibility
                             pass + marginal-detour insertion + regret-2 batch (issue #7)
 src/services/itinerary.ts   LiteStop[] chosen by the dispatcher -> materialised PlanStop[] (ETAs + geometry)
+src/services/trackedRider.ts  Read-model for the one manually-injected rider a person is watching (issue #11)
 src/services/routing.ts     haversine fallback / Google DirectionsService wrapper
-src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state
-src/components/             SimulationMap (Google), FallbackMap (SVG), controls, metrics
+src/pages/Index.tsx         Drives the loop with setInterval(400ms); owns all React state + the mapMode machine
+src/engine/simulator.ts     also exports injectRequest() — push a person's mid-run rider through the normal classify path (issue #11)
+src/components/             SimulationMap (Google), FallbackMap (SVG), controls, metrics, RiderRequestForm (issue #11)
 src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
 ```
 
