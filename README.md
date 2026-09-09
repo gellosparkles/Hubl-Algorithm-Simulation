@@ -1,4 +1,4 @@
-# LA Transit Navigator
+# Hubl Simulation
 
 An **on-demand transit simulator for the Los Angeles basin**. Rider requests appear stochastically
 across the map; the algorithm groups nearby riders into *virtual stops*, classifies each trip
