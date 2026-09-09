@@ -240,6 +240,38 @@ function liveStopRiders(
   });
 }
 
+/**
+ * Repositioning targets for idle buses (issue #9, step 4b): the demand-weighted
+ * centroid of every open inbound stop, plus each distinct hub that has open
+ * outbound demand. Empty when nothing is waiting — callers then leave idle buses
+ * put. Deterministic: `s.stops` is iterated in insertion order and no RNG runs.
+ */
+function demandTargets(s: SimState, now: number): LatLng[] {
+  let wLat = 0;
+  let wLng = 0;
+  let w = 0;
+  const hubs: LatLng[] = [];
+  const seenHub = new Set<number>();
+  for (const st of Object.values(s.stops)) {
+    if (st.status !== "open" || st.dropOffHubIndex == null) continue;
+    const riders = liveStopRiders(st, s.requests, now).length;
+    if (riders === 0) continue;
+    if (st.direction === "inbound") {
+      wLat += st.position.lat * riders;
+      wLng += st.position.lng * riders;
+      w += riders;
+    } else if (st.direction === "outbound" && !seenHub.has(st.dropOffHubIndex)) {
+      const hub = s.dropOffHubs[st.dropOffHubIndex];
+      if (hub) {
+        seenHub.add(st.dropOffHubIndex);
+        hubs.push(hub);
+      }
+    }
+  }
+  if (w > 0) hubs.push({ lat: wLat / w, lng: wLng / w });
+  return hubs;
+}
+
 export async function simulateStep(
   state: SimState,
   config: SimConfig
@@ -490,32 +522,28 @@ export async function simulateStep(
     }
   }
 
-  // 4b. Idle repositioning (issue #7, plan.md Phase 3e). A bus with no plan drifts
-  //     one tick's travel toward the nearest live-demand anchor — the stop itself
-  //     for inbound demand, the hub for outbound. Without this, buses freeze at
-  //     their last drop-off and the pickup-deadline feasibility check has nothing
-  //     reachable to do next tick.
+  // 4b. Idle repositioning (issue #9, plan.md Phase 3e). Off by default. A bus
+  //     with no plan drifts one tick's travel toward a demand target: the
+  //     demand-weighted centre of open inbound stops, or the nearest hub that
+  //     has open outbound demand. No plan is set, so a repositioning bus is
+  //     still a normal spare-capacity candidate at its new position on the next
+  //     dispatch tick — the drift is interruptible. Its km count as deadhead.
   if (config.rebalanceEnabled) {
-    const anchors: LatLng[] = [];
-    for (const st of Object.values(s.stops)) {
-      if (st.status !== "open" || st.dropOffHubIndex == null) continue;
-      if (liveStopRiders(st, s.requests, s.time).length === 0) continue;
-      const a = st.direction === "outbound" ? s.dropOffHubs[st.dropOffHubIndex] : st.position;
-      if (a) anchors.push(a);
-    }
-    if (anchors.length > 0) {
+    const targets = demandTargets(s, s.time);
+    if (targets.length > 0) {
       const stepKm = speedAt(s.time, config.speedProfile) / 60;
       for (const bus of Object.values(s.buses)) {
         if (bus.plan.length > 0) continue;
-        let target = anchors[0];
+        let target = targets[0];
         let bestD = Infinity;
-        for (const a of anchors) {
+        for (const a of targets) {
           const d = haversine(bus.position, a);
           if (d < bestD) {
             bestD = d;
             target = a;
           }
         }
+        // Already on top of demand — don't jitter the bus around by sub-50 m.
         if (bestD < 0.05) continue;
         const f = Math.min(1, stepKm / bestD);
         bus.position = {

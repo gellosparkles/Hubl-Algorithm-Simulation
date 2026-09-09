@@ -63,10 +63,13 @@ src/components/ui/          shadcn/ui primitives — generated, don't hand-edit
    feasibility pass (load profile ≤ capacity at every point, every rider boards by
    `promisedPickupBy`, no rider past `maxRideTimeMin`, whole itinerary ≤ `timeBudgetMinutes`).
    Batch commit order is regret-2. Runs every `batchWindowMinutes` ticks.
-4b. Idle repositioning (`config.rebalanceEnabled`, default on — plan.md Phase 3e): a bus with no
-   plan drifts one tick's travel toward the nearest live-demand anchor. On by default because with
-   the pickup-deadline check enforced a frozen idle bus is effectively locked out; flip off to
-   isolate 3b/3c.
+4b. Idle repositioning (`config.rebalanceEnabled`, **default off** — plan.md Phase 3e, issue #9): a
+   bus with no plan drifts one tick's travel toward the demand-weighted centre of open inbound
+   stops, or the nearest hub with open outbound demand. No plan is set, so a mid-drift bus is still
+   a normal spare-capacity candidate on the next dispatch tick (interruptible); its drift km are
+   booked as deadhead. Off by default so its wait-time effect is measured in isolation from the #7
+   dispatcher — and as implemented it's a poor trade (haversine, 5 seeds: completed 4→7, waitP50
+   5.5→7.2 min, vehicleKm 35→219, deadhead 21%→79%), so leave it off until the drift is tamed.
 5. Recompute metrics, `time += 1`
 
 **Rider lifecycle:** `pending` → `picked_up` → `completed`. Since issue #4, `picked_up` is set when the
@@ -115,18 +118,21 @@ When comparing algorithm variants, hold the seed fixed and change one parameter.
 seeds before believing a result — one seed is an anecdote.
 
 **Baseline to beat.** At `DEFAULT_CONFIG` (8 buses, 6 req/min) over 60 minutes, mean of 5 seeds
-with the haversine `TravelTimeProvider` (`bench/baseline.json`, re-recorded for issue #7):
-~363 requests, **~229 pending, ~124 unserved, ~7 completed, ~182 expired**, ~231 stops,
-~11 bus assignments, waitP50 ~7 min, poolingRate ~34%, detourRatio ~1.26. Requests split roughly
+with the haversine `TravelTimeProvider` (`bench/baseline.json`, re-recorded for issue #9 — now with
+`rebalanceEnabled` off, its new default):
+~363 requests, **~233 pending, ~124 unserved, ~4 completed, ~186 expired**, ~233 stops,
+~7 bus assignments, waitP50 ~5.5 min, poolingRate ~17%, detourRatio ~1.26, vehicleKm ~35. Requests split roughly
 ⅓ inbound / ⅓ outbound / ⅓ `unserved`. Both inbound and outbound stops are now dispatched.
 Throughput is still low but for a *different* reason than before issue #7: the feasibility pass
 now enforces `promisedPickupBy` (`tRequest + maxWaitMinutes`, default 10) and a whole-itinerary
 `timeBudgetMinutes` (default 25) as hard gates, and with an 8-vehicle fleet spread over the LA
 basin most requests can't be reached inside a 10-minute promise — they age out as `expired`.
-The old ~4 completions came from the greedy planner *starting* long trips it couldn't finish;
-the new completions are trips actually delivered (waitP50 26→7, pooling 21%→34%). Raising
-`numBuses`, `timeBudgetMinutes` or `maxWaitMinutes` moves service rate up smoothly — fleet and
-policy tuning is what the downstream tickets (#8, #9, #11, #12) are for.
+The pre-#7 greedy planner also reported ~4 completions, but those were long trips it *started*
+and never finished; the ~4 here are trips actually delivered, and wait dropped hard along the
+way (waitP50 26→5.5). Raising `numBuses`, `timeBudgetMinutes` or `maxWaitMinutes` moves service
+rate up smoothly — fleet and policy tuning is what the downstream tickets (#11, #12) are for.
+Turning on `rebalanceEnabled` (#9) lifts completions ~4→7 but at ~6× the vehicle-km, a worse
+waitP50 (5.5→7.2) and deadhead 21%→79% — a bad trade as currently tuned, hence off by default.
 The issue-#5 change (persistent grid-snapped stops, `minGroupSize` default 1) inflated
 `totalStops` ~10→~234: every occupied ~150 m cell — inbound *and* outbound, lone riders included —
 is now one stable stop that lives across ticks instead of a per-tick centroid that expired and

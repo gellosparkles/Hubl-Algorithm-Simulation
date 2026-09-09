@@ -198,6 +198,75 @@ describe("bus itineraries (issue #4)", () => {
   });
 });
 
+describe("idle repositioning (issue #9)", () => {
+  // Warm up with dispatch disabled (batchWindowMinutes huge, tick not a
+  // multiple) so buses stay idle and open demand accumulates; then step once
+  // more with dispatch still off, isolating step 4b.
+  async function idleStateWithDemand(seed: number) {
+    const config: SimConfig = {
+      ...DEFAULT_CONFIG,
+      seed,
+      simMinutes: 60,
+      numBuses: 4,
+      batchWindowMinutes: 1000,
+      rebalanceEnabled: false,
+    };
+    let s = createInitialState(config);
+    s.dropOffHubs = HUBS;
+    for (let i = 0; i < 20; i++) s = await simulateStep(s, config);
+    return { s, config };
+  }
+
+  it("leaves idle buses put when the flag is off", async () => {
+    const { s, config } = await idleStateWithDemand(12345);
+    const before = Object.values(s.buses).map((b) => ({ ...b.position }));
+    const after = await simulateStep(s, { ...config, rebalanceEnabled: false });
+    Object.values(after.buses).forEach((b, i) => {
+      expect(b.position).toEqual(before[i]);
+    });
+  });
+
+  it("drifts idle buses toward demand when the flag is on, and books the drift as deadhead", async () => {
+    const { s, config } = await idleStateWithDemand(12345);
+    const before = Object.values(s.buses).map((b) => ({ ...b.position }));
+
+    const off = await simulateStep(structuredClone(s) as SimState, { ...config, rebalanceEnabled: false });
+    const on = await simulateStep(structuredClone(s) as SimState, { ...config, rebalanceEnabled: true });
+
+    const moved = Object.values(on.buses).filter(
+      (b, i) => haversine(b.position, before[i]) > 1e-9
+    );
+    expect(moved.length).toBeGreaterThan(0);
+    expect(on.kpi.deadheadKm).toBeGreaterThan(off.kpi.deadheadKm);
+    expect(on.kpi.vehicleKm).toBeGreaterThan(off.kpi.vehicleKm);
+  });
+
+  it("sets no plan while repositioning, so the bus stays interruptible by the dispatcher", async () => {
+    const { s, config } = await idleStateWithDemand(12345);
+    const before = Object.values(s.buses).map((b) => ({ ...b.position }));
+    const on = await simulateStep(s, { ...config, rebalanceEnabled: true });
+    // Some bus drifted, yet no bus holds a reposition "plan" — the dispatcher
+    // sees a plain spare-capacity vehicle at the new position next tick.
+    expect(
+      Object.values(on.buses).some((b, i) => haversine(b.position, before[i]) > 1e-9)
+    ).toBe(true);
+    for (const bus of Object.values(on.buses)) {
+      expect(bus.plan).toEqual([]);
+      expect(bus.legIndex).toBe(0);
+    }
+  });
+
+  it("repositioning is deterministic for a fixed seed", async () => {
+    const a = await idleStateWithDemand(777);
+    const b = await idleStateWithDemand(777);
+    const onA = await simulateStep(a.s, { ...a.config, rebalanceEnabled: true });
+    const onB = await simulateStep(b.s, { ...b.config, rebalanceEnabled: true });
+    expect(Object.values(onB.buses).map((x) => x.position)).toEqual(
+      Object.values(onA.buses).map((x) => x.position)
+    );
+  });
+});
+
 describe("simulation invariants", () => {
   it("advances one minute per step", async () => {
     const config: SimConfig = { ...DEFAULT_CONFIG, seed: 3 };

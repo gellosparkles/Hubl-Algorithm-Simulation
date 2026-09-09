@@ -118,11 +118,12 @@ export interface SimConfig {
   /** Run the dispatcher every N sim-minutes. 1 = every tick; ≥2 trades wait for match quality. */
   batchWindowMinutes: number;
   /**
-   * Drift idle buses toward live demand each tick (plan.md Phase 3e). On by
-   * default: with the pickup-deadline feasibility check now enforced, a bus
-   * frozen at its last drop-off is effectively locked out, so #7's "buses are
-   * no longer locked until they finish" goal needs this. Flip off to measure
-   * 3b/3c insertion in isolation.
+   * Drift idle buses toward live demand each tick (plan.md Phase 3e, issue #9):
+   * toward the demand-weighted centre of open inbound stops, or the nearest hub
+   * with outbound demand. Off by default so its wait-time contribution can be
+   * measured in isolation rather than tangled up with the #7 dispatcher change.
+   * Repositioning sets no plan, so a bus mid-drift is still a candidate for a
+   * real assignment on the next dispatch tick; its drift km count as deadhead.
    */
   rebalanceEnabled: boolean;
   /** Cost weights the insertion dispatcher and benchmarks score routes with (issue #7). */
@@ -246,7 +247,7 @@ export const DEFAULT_CONFIG: SimConfig = {
   dwellPickupPerRiderMin: 0.2,
   dwellDropoffMin: 1,
   batchWindowMinutes: 1,
-  rebalanceEnabled: true,
+  rebalanceEnabled: false,
   objective: DEFAULT_OBJECTIVE,
   useGoogleRouting: false,
   googleApiKey: "",
