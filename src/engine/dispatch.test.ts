@@ -247,4 +247,80 @@ describe("InsertionDispatcher", () => {
     const a = result.assignments.find((x) => x.stopIds.includes(1));
     expect(a?.vehicleId).toBe(1);
   });
+
+  it("regret ordering beats first-come ordering on total objective cost", async () => {
+    // Two inbound stops, two capacity-1 buses. B1 is the only bus that can serve
+    // S2 without a large off-corridor detour; B2 is a near-tie with B1 for S1.
+    // First-come walks the buses in order and lets B1 grab its own cheapest stop
+    // (S1), stranding S2 on B2 at a big cost. Regret sees S2 has far more to lose
+    // and commits it to B1 first, leaving S1 for the near-tie bus B2.
+    const A: LatLng = { lat: 34.02, lng: -118.3 };
+    const H = offset(A, 30, 0);
+    const S1 = offset(A, 10, 0); // dead on the A→H corridor
+    const S2 = offset(A, 10, 8); // 8 km off-corridor, and far from B2
+    const B1 = offset(A, 8, 2);
+    const B2 = offset(A, 9, -1);
+    const wide: SimConfig = { ...config, timeBudgetMinutes: 300 };
+
+    const riders = new Map<number, RiderMeta>([
+      [1, meta({ directTimeMin: 20, maxRideTimeMin: 300, promisedPickupBy: 300 })],
+      [2, meta({ directTimeMin: 20, maxRideTimeMin: 300, promisedPickupBy: 300 })],
+    ]);
+    const ship = (id: number, pos: LatLng): Shipment => ({
+      id,
+      direction: "inbound",
+      hubIndex: 0,
+      pickup: { location: pos },
+      delivery: { location: H },
+      load: 1,
+      riderIds: [id],
+      pickupTimeWindowEnd: 300,
+      maxRideTimeMin: 300,
+    });
+    const shipments = [ship(1, S1), ship(2, S2)];
+    const vehicles: Vehicle[] = [
+      { id: 1, loadLimit: 1, position: B1, onboard: [], plan: [] },
+      { id: 2, loadLimit: 1, position: B2, onboard: [], plan: [] },
+    ];
+
+    const totalCost = (asg: { vehicleId: number; lite: LiteStop[] }[]): number => {
+      let sum = 0;
+      for (const a of asg) {
+        const v = vehicles.find((x) => x.id === a.vehicleId)!;
+        const sim = simulateItinerary(v.position, [], a.lite, riders, wide, 0, provider, v.loadLimit);
+        sum += objectiveCost(sim.parts, wide.objective);
+      }
+      return sum;
+    };
+
+    // First-come: each vehicle in turn greedily absorbs its own cheapest feasible
+    // shipment until none remains feasible — the pre-#8 assignment strategy.
+    const remaining = new Set(shipments.map((s) => s.id));
+    const firstCome: { vehicleId: number; lite: LiteStop[] }[] = [];
+    for (const v of vehicles) {
+      let cur: Vehicle = { ...v, plan: [] };
+      for (;;) {
+        let best: { id: number; lite: LiteStop[]; cost: number } | null = null;
+        for (const sid of remaining) {
+          const bi = bestInsertion(cur, shipments.find((s) => s.id === sid)!, riders, wide, 0, provider);
+          if (bi && (best === null || bi.cost < best.cost)) best = { id: sid, lite: bi.lite, cost: bi.cost };
+        }
+        if (!best) break;
+        cur = { ...cur, plan: best.lite };
+        remaining.delete(best.id);
+      }
+      if (cur.plan.length) firstCome.push({ vehicleId: v.id, lite: cur.plan });
+    }
+
+    const regret = (
+      await new InsertionDispatcher().dispatch({ shipments, vehicles, riders, now: 0 }, wide, provider)
+    ).assignments;
+
+    const pickups = (asg: { lite: LiteStop[] }[]) =>
+      asg.flatMap((a) => a.lite.filter((s) => s.kind === "pickup")).length;
+    expect(pickups(firstCome)).toBe(2); // first-come places both stops…
+    expect(pickups(regret)).toBe(2); // …and so does regret, but on a better pairing
+
+    expect(totalCost(regret)).toBeLessThan(totalCost(firstCome));
+  });
 });
